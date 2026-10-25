@@ -1,0 +1,13 @@
+# Laragon's Apache can serve this folder. This tool can deploy to prod,
+# so only this computer may open it.
+Require local
+
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # Code, views, and storage (FTP passwords) are never served.
+    RewriteRule ^(src|views|storage)(/|$) - [F,L]
+    RewriteRule (^|/)\. - [F,L]
+    RewriteRule ^router\.php$ - [F,L]
+</IfModule>
