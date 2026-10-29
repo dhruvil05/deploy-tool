@@ -120,6 +120,26 @@ Check:
 Delete `C:\deploy-test`, and in **Sites** delete the two test sites.
 History and backups are in `C:\laragon\www\deploy-tool\storage` (safe to delete).
 
+## Background runs
+
+Start a Compare or Deploy, then close the tab or reload it. Open the dashboard later: the
+run kept going. If it didn't, `storage/worker.log` says why (the page then works as before).
+
+## SSH site
+
+1. Make a key without a passphrase: `ssh-keygen -t ed25519 -N "" -f %USERPROFILE%\.ssh\deploy_tool`
+2. cPanel → SSH Access → Manage SSH Keys → Import the `.pub` file → Authorize it.
+3. Sites → Add site → "On a server (SSH)": host, port, cPanel username, key file
+   `C:\Users\you\.ssh\deploy_tool`, folder e.g. `~/stagingoffice.dvijinfotech.com`, PHP `php`.
+   Production off, and use a test folder first, not staging or prod.
+4. **Test connection** → "Connected". Then **Compare**: it should take seconds.
+
+## FTP with several connections
+
+On the real staging site: **Compare** with "File sizes over FTP". It should be about 4× faster
+than before (the old run took about 45–60 minutes). If the host refuses connections, set
+"Connections at once" to 2 or 1.
+
 ## Later: test over FTP, on a server that isn't staging or prod
 
 Folder sites test everything except the FTP connection itself. To test FTP:

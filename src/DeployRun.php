@@ -261,20 +261,22 @@ final class DeployRun
 
     private static function lint(array &$run, RunContext $context, float $deadline): void
     {
-        foreach ($run['files'] as $i => $file) {
-            if ($file['linted'] || $file['action'] !== 'upload') {
-                continue;
-            }
+        while ($batch = Runner::pick($run['files'], static fn (array $file): bool => !$file['linted'] && $file['action'] === 'upload', 300)) {
             if (microtime(true) >= $deadline) {
                 return;
             }
-            if (strtolower(pathinfo($file['path'], PATHINFO_EXTENSION)) === 'php') {
-                $error = Linter::check($context->blob($run['to'], $file['path']), $file['path']);
-                if ($error !== null) {
-                    $run['lint_errors'][] = ['path' => $file['path'], 'error' => $error];
+            $phpPaths = [];
+            foreach ($batch as $i) {
+                if (strtolower(pathinfo($run['files'][$i]['path'], PATHINFO_EXTENSION)) === 'php') {
+                    $phpPaths[] = $run['files'][$i]['path'];
                 }
             }
-            $run['files'][$i]['linted'] = true;
+            foreach (Linter::checkMany($context->blobs($run['to'], $phpPaths)) as $path => $error) {
+                $run['lint_errors'][] = ['path' => (string) $path, 'error' => $error];
+            }
+            foreach ($batch as $i) {
+                $run['files'][$i]['linted'] = true;
+            }
         }
         if ($run['lint_errors']) {
             self::fail($run, count($run['lint_errors']) . ' PHP file(s) have syntax errors. Nothing was changed on the server.');
@@ -289,23 +291,28 @@ final class DeployRun
     {
         $transport = $context->transport();
         $count = 0;
-        foreach ($run['files'] as $i => $file) {
-            if ($file['downloaded']) {
-                continue;
-            }
+        while ($batch = Runner::pick($run['files'], static fn (array $file): bool => !$file['downloaded'], $transport->batchSize())) {
             if (microtime(true) >= $deadline) {
                 self::logCount($run, 'Backed up', $count, 'download');
                 return;
             }
-            $server = $transport->get($file['path']);
-            if ($server !== null) {
-                Backup::save($run['id'], $file['path'], $server);
+            $servers = $transport->getMany(array_map(static fn (int $i): string => $run['files'][$i]['path'], $batch));
+            $expected = [];
+            if ($run['type'] === 'deploy') {
+                $old = array_filter($batch, static fn (int $i): bool => $run['files'][$i]['change'] !== 'new');
+                $expected = $context->git()->filesAt($run['from'], array_map(static fn (int $i): string => $run['files'][$i]['path'], $old));
             }
-            $expected = $run['type'] === 'deploy' && $file['change'] !== 'new' ? $context->git()->fileAt($run['from'], $file['path']) : null;
-            $run['files'][$i]['server'] = self::serverState($run['type'], $file['change'], $server, $expected);
-            $run['files'][$i]['existed'] = $server !== null;
-            $run['files'][$i]['downloaded'] = true;
-            $count++;
+            foreach ($batch as $i) {
+                $file = $run['files'][$i];
+                $server = $servers[$file['path']];
+                if ($server !== null) {
+                    Backup::save($run['id'], $file['path'], $server);
+                }
+                $run['files'][$i]['server'] = self::serverState($run['type'], $file['change'], $server, $expected[$file['path']] ?? null);
+                $run['files'][$i]['existed'] = $server !== null;
+                $run['files'][$i]['downloaded'] = true;
+                $count++;
+            }
         }
         self::logCount($run, 'Backed up', $count, 'download');
         $packed = Backup::pack($run);
@@ -323,18 +330,23 @@ final class DeployRun
         $run['touched'] = true;
         $transport = $context->transport();
         $count = 0;
-        foreach ($run['files'] as $i => $file) {
-            if ($file['action'] !== 'upload' || $file['done']) {
-                continue;
-            }
+        while ($batch = Runner::pick($run['files'], static fn (array $file): bool => $file['action'] === 'upload' && !$file['done'], $transport->batchSize())) {
             if (microtime(true) >= $deadline) {
                 self::logCount($run, 'Uploaded', $count, 'upload');
                 return;
             }
-            $transport->put($file['path'], $context->blob($run['to'], $file['path']));
-            $run['files'][$i]['sent'] = true;
-            $run['files'][$i]['done'] = true;
-            $count++;
+            $errors = $transport->putMany($context->blobs($run['to'], array_map(static fn (int $i): string => $run['files'][$i]['path'], $batch)));
+            foreach ($batch as $i) {
+                $run['files'][$i]['sent'] = true; // even when it failed: the server copy may have changed, so a rollback restores it
+                if (!isset($errors[$run['files'][$i]['path']])) {
+                    $run['files'][$i]['done'] = true;
+                    $count++;
+                }
+            }
+            if ($errors !== []) {
+                self::logCount($run, 'Uploaded', $count, 'upload');
+                Runner::failOnErrors($errors, 'uploaded');
+            }
         }
         self::logCount($run, 'Uploaded', $count, 'upload');
         $run['phase'] = 'delete';
@@ -351,18 +363,23 @@ final class DeployRun
         if ($deletes > 0 && $run['delete_approved']) {
             $transport = $context->transport();
             $count = 0;
-            foreach ($run['files'] as $i => $file) {
-                if ($file['action'] !== 'delete' || $file['done']) {
-                    continue;
-                }
+            while ($batch = Runner::pick($run['files'], static fn (array $file): bool => $file['action'] === 'delete' && !$file['done'], $transport->batchSize())) {
                 if (microtime(true) >= $deadline) {
                     self::logCount($run, 'Deleted', $count, 'delete');
                     return;
                 }
-                $transport->delete($file['path']);
-                $run['files'][$i]['sent'] = true;
-                $run['files'][$i]['done'] = true;
-                $count++;
+                $errors = $transport->deleteMany(array_map(static fn (int $i): string => $run['files'][$i]['path'], $batch));
+                foreach ($batch as $i) {
+                    $run['files'][$i]['sent'] = true;
+                    if (!isset($errors[$run['files'][$i]['path']])) {
+                        $run['files'][$i]['done'] = true;
+                        $count++;
+                    }
+                }
+                if ($errors !== []) {
+                    self::logCount($run, 'Deleted', $count, 'delete');
+                    Runner::failOnErrors($errors, 'deleted');
+                }
             }
             self::logCount($run, 'Deleted', $count, 'delete');
         }
@@ -374,23 +391,26 @@ final class DeployRun
     {
         $transport = $context->transport();
         $count = 0;
-        foreach ($run['files'] as $i => $file) {
-            if (!$file['done'] || $file['verified']) {
-                continue;
-            }
+        while ($batch = Runner::pick($run['files'], static fn (array $file): bool => $file['done'] && !$file['verified'], $transport->batchSize())) {
             if (microtime(true) >= $deadline) {
                 self::logCount($run, 'Verified', $count, 'verify');
                 return;
             }
-            $server = $transport->get($file['path']);
-            $ok = $file['action'] === 'upload' ? $server === $context->blob($run['to'], $file['path']) : $server === null;
-            if ($ok) {
-                $run['files'][$i]['verified'] = true;
-            } else {
-                $run['files'][$i]['done'] = false;
-                Runner::log($run, 'error', "{$file['path']} did not match after the upload.");
+            $servers = $transport->getMany(array_map(static fn (int $i): string => $run['files'][$i]['path'], $batch));
+            $uploads = array_filter($batch, static fn (int $i): bool => $run['files'][$i]['action'] === 'upload');
+            $blobs = $context->blobs($run['to'], array_map(static fn (int $i): string => $run['files'][$i]['path'], $uploads));
+            foreach ($batch as $i) {
+                $file = $run['files'][$i];
+                $server = $servers[$file['path']];
+                $ok = $file['action'] === 'upload' ? $server === $blobs[$file['path']] : $server === null;
+                if ($ok) {
+                    $run['files'][$i]['verified'] = true;
+                } else {
+                    $run['files'][$i]['done'] = false;
+                    Runner::log($run, 'error', "{$file['path']} did not match after the upload.");
+                }
+                $count++;
             }
-            $count++;
         }
         self::logCount($run, 'Verified', $count, 'verify');
 

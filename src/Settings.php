@@ -4,20 +4,29 @@ declare(strict_types=1);
 
 namespace DeployTool;
 
-/** Tool settings: who is deploying, and which git and PHP programs to use. Repositories are locals (Sources). */
+/**
+ * Tool settings: who is deploying, which git, PHP and ssh programs to use, and the paths
+ * protected on every site. Repositories are locals (Sources).
+ */
 final class Settings
 {
-    private const DEFAULTS = [
-        'deployer_name' => '',
-        'git_path' => '',
-        'php_path' => '',
-    ];
-
     private const LARAGON_GIT = 'C:\\laragon\\bin\\git\\bin\\git.exe';
+    private const WINDOWS_SSH = 'C:\\Windows\\System32\\OpenSSH\\ssh.exe';
+
+    public static function defaults(): array
+    {
+        return [
+            'deployer_name' => '',
+            'git_path' => '',
+            'php_path' => '',
+            'ssh_path' => '',
+            'protected_paths' => implode("\n", ProtectedPaths::DEFAULTS),
+        ];
+    }
 
     public static function all(): array
     {
-        return array_merge(self::DEFAULTS, array_intersect_key(JsonStore::read('settings'), self::DEFAULTS));
+        return array_merge(self::defaults(), array_intersect_key(JsonStore::read('settings'), self::defaults()));
     }
 
     public static function get(string $key): string
@@ -35,15 +44,19 @@ final class Settings
     public static function save(array $input): array
     {
         $values = [];
-        foreach (array_keys(self::DEFAULTS) as $key) {
+        foreach (array_keys(self::defaults()) as $key) {
             $values[$key] = trim((string) ($input[$key] ?? ''));
         }
+        $values['protected_paths'] = implode("\n", array_unique(ProtectedPaths::parse($values['protected_paths'])));
 
         $errors = [];
+        if (str_contains($values['protected_paths'], '..')) {
+            $errors['protected_paths'] = 'Paths cannot contain "..".';
+        }
         if ($values['deployer_name'] === '') {
             $errors['deployer_name'] = 'Enter your name. It is recorded on the server with every deploy.';
         }
-        foreach (['git_path', 'php_path'] as $key) {
+        foreach (['git_path', 'php_path', 'ssh_path'] as $key) {
             if ($values[$key] !== '' && !is_file($values[$key])) {
                 $errors[$key] = 'File not found.';
             }
@@ -63,6 +76,16 @@ final class Settings
             return $configured;
         }
         return is_file(self::LARAGON_GIT) ? self::LARAGON_GIT : 'git';
+    }
+
+    /** The configured ssh, else Windows' own OpenSSH, else ssh from PATH. */
+    public static function sshBinary(?string $configured = null): string
+    {
+        $configured ??= self::get('ssh_path');
+        if ($configured !== '') {
+            return $configured;
+        }
+        return is_file(self::WINDOWS_SSH) ? self::WINDOWS_SSH : 'ssh';
     }
 
     /** The configured PHP, else the PHP running this tool, else php.exe next to the loaded php.ini. */

@@ -28,13 +28,15 @@ use DeployTool\Http;
 
     <?php if ($site['type'] === 'folder'): ?>
         <p class="meta">This is a folder site, so every file is fingerprinted directly. Exact and quick.</p>
+    <?php elseif ($site['type'] === 'ssh'): ?>
+        <p class="meta">This is an SSH site: the server fingerprints every file itself in one call, without putting anything in the web folder. Exact, takes seconds. It never reads protected folders like uploads/.</p>
     <?php else: ?>
         <fieldset class="field">
             <legend>How to read the server</legend>
-            <label class="checkbox"><input type="radio" name="method" value="sizes" checked>
-                <span><strong>File sizes over FTP.</strong> Uploads nothing. Slower on big sites, and can't spot an edit that keeps the size; Windows line endings show as different.</span></label>
-            <label class="checkbox"><input type="radio" name="method" value="fingerprint">
-                <span><strong>Fingerprint file.</strong> Uploads a temporary <code>dt-fingerprint-….php</code> to the site folder, calls it once over HTTPS with a one-time key, then deletes it. Exact, takes seconds. It never reads protected folders like uploads/.</span></label>
+            <label class="checkbox"><input type="radio" name="method" value="fingerprint" checked>
+                <span><strong>Fingerprint file (recommended).</strong> Uploads a temporary <code>dt-fingerprint-….php</code> to the site folder, calls it once over HTTPS with a one-time key, then deletes it. Exact, takes seconds, and tells line-ending-only differences apart. It never reads protected folders like uploads/.</span></label>
+            <label class="checkbox"><input type="radio" name="method" value="sizes">
+                <span><strong>File sizes over FTP.</strong> Uploads nothing; use it when the fingerprint file can't run (for example the site address doesn't reach this folder). Lists <?= (int) $site['connections'] ?> folders at a time, but still takes minutes on big sites, can't spot an edit that keeps the size, and Windows line endings show as different.</span></label>
         </fieldset>
     <?php endif ?>
 

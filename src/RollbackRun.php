@@ -144,20 +144,28 @@ final class RollbackRun
     {
         $run['touched'] = true;
         $transport = $context->transport();
-        foreach ($run['files'] as $i => $file) {
-            if ($file['done']) {
-                continue;
-            }
+        while ($batch = Runner::pick($run['files'], static fn (array $file): bool => !$file['done'], $transport->batchSize())) {
             if (microtime(true) >= $deadline) {
                 return;
             }
-            if ($file['action'] === 'restore') {
-                $transport->put($file['path'], (string) Backup::get($run['rollback_of'], $file['path']));
-            } else {
-                $transport->delete($file['path']);
+            $puts = [];
+            $deletes = [];
+            foreach ($batch as $i) {
+                $path = $run['files'][$i]['path'];
+                if ($run['files'][$i]['action'] === 'restore') {
+                    $puts[$path] = (string) Backup::get($run['rollback_of'], $path);
+                } else {
+                    $deletes[] = $path;
+                }
             }
-            $run['files'][$i]['sent'] = true;
-            $run['files'][$i]['done'] = true;
+            $errors = ($puts !== [] ? $transport->putMany($puts) : []) + ($deletes !== [] ? $transport->deleteMany($deletes) : []);
+            foreach ($batch as $i) {
+                $run['files'][$i]['sent'] = true;
+                if (!isset($errors[$run['files'][$i]['path']])) {
+                    $run['files'][$i]['done'] = true;
+                }
+            }
+            Runner::failOnErrors($errors, 'restored');
         }
         Runner::log($run, 'info', 'Files restored.');
         $run['phase'] = 'verify';
@@ -166,20 +174,21 @@ final class RollbackRun
     private static function verify(array &$run, RunContext $context, float $deadline): void
     {
         $transport = $context->transport();
-        foreach ($run['files'] as $i => $file) {
-            if (!$file['done'] || $file['verified']) {
-                continue;
-            }
+        while ($batch = Runner::pick($run['files'], static fn (array $file): bool => $file['done'] && !$file['verified'], $transport->batchSize())) {
             if (microtime(true) >= $deadline) {
                 return;
             }
-            $server = $transport->get($file['path']);
-            $ok = $file['action'] === 'restore' ? $server === Backup::get($run['rollback_of'], $file['path']) : $server === null;
-            if ($ok) {
-                $run['files'][$i]['verified'] = true;
-            } else {
-                $run['files'][$i]['done'] = false;
-                Runner::log($run, 'error', "{$file['path']} did not match the backup after restoring.");
+            $servers = $transport->getMany(array_map(static fn (int $i): string => $run['files'][$i]['path'], $batch));
+            foreach ($batch as $i) {
+                $file = $run['files'][$i];
+                $server = $servers[$file['path']];
+                $ok = $file['action'] === 'restore' ? $server === Backup::get($run['rollback_of'], $file['path']) : $server === null;
+                if ($ok) {
+                    $run['files'][$i]['verified'] = true;
+                } else {
+                    $run['files'][$i]['done'] = false;
+                    Runner::log($run, 'error', "{$file['path']} did not match the backup after restoring.");
+                }
             }
         }
         $pending = count(array_filter($run['files'], static fn (array $file): bool => !$file['done']));

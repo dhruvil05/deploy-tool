@@ -17,24 +17,30 @@ final class Git
      * Runs git directly (no shell, so nothing in an argument is interpreted).
      * Returns [exit code, stdout, stderr].
      */
-    public function run(array $args): array
+    public function run(array $args, ?string $input = null): array
     {
         $command = array_merge([$this->binary, '-C', $this->repo, '-c', 'core.quotepath=off'], $args);
-        // stderr goes to a file: two pipes can deadlock when git writes a lot to both.
+        // Input and output go through files: pipes can deadlock when git writes a lot while
+        // we write, and on Windows PHP reads a big pipe output many times slower than a file.
+        $inputFile = tempnam(sys_get_temp_dir(), 'dtgit');
+        $outputFile = tempnam(sys_get_temp_dir(), 'dtgit');
         $errorFile = tempnam(sys_get_temp_dir(), 'dtgit');
+        file_put_contents($inputFile, (string) $input);
         $env = array_merge(getenv(), ['GIT_TERMINAL_PROMPT' => '0']);
 
-        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', $errorFile, 'w']], $pipes, null, $env);
-        if (!is_resource($process)) {
+        try {
+            $process = proc_open($command, [0 => ['file', $inputFile, 'r'], 1 => ['file', $outputFile, 'w'], 2 => ['file', $errorFile, 'w']], $pipes, null, $env);
+            if (!is_resource($process)) {
+                throw new \RuntimeException("Could not start git ({$this->binary}). Check the git path in Settings.");
+            }
+            $code = proc_close($process);
+            $stdout = (string) file_get_contents($outputFile);
+            $stderr = trim((string) file_get_contents($errorFile));
+        } finally {
+            @unlink($inputFile);
+            @unlink($outputFile);
             @unlink($errorFile);
-            throw new \RuntimeException("Could not start git ({$this->binary}). Check the git path in Settings.");
         }
-        fclose($pipes[0]);
-        $stdout = (string) stream_get_contents($pipes[1]);
-        fclose($pipes[1]);
-        $code = proc_close($process);
-        $stderr = trim((string) file_get_contents($errorFile));
-        @unlink($errorFile);
 
         return [$code, $stdout, $stderr];
     }
@@ -46,9 +52,9 @@ final class Git
     }
 
     /** Like ok(), without trimming (for -z output). */
-    public function okRaw(array $args): string
+    public function okRaw(array $args, ?string $input = null): string
     {
-        [$code, $stdout, $stderr] = $this->run($args);
+        [$code, $stdout, $stderr] = $this->run($args, $input);
         if ($code !== 0) {
             throw new \RuntimeException('git ' . implode(' ', $args) . ' failed: ' . ($stderr !== '' ? $stderr : "exit code $code"));
         }
@@ -160,6 +166,47 @@ final class Git
     {
         [$code, $stdout] = $this->run(['cat-file', 'blob', "$sha:$path"]);
         return $code === 0 ? $stdout : null;
+    }
+
+    /**
+     * Many files of one commit with a single git call: path => contents exactly as
+     * committed, or null when the path is not a file in that commit.
+     */
+    public function filesAt(string $sha, array $paths): array
+    {
+        $paths = array_values(array_unique(array_map('strval', $paths)));
+        if ($paths === []) {
+            return [];
+        }
+        $input = '';
+        foreach ($paths as $path) {
+            if (str_contains($path, "\n")) {
+                throw new \RuntimeException('A path cannot contain a line break: ' . json_encode($path));
+            }
+            $input .= "$sha:$path\n";
+        }
+        $output = $this->okRaw(['cat-file', '--batch'], $input);
+
+        // Each answer is "<object> <type> <size>\n<contents>\n", or "<name> missing\n".
+        $files = [];
+        $pos = 0;
+        foreach ($paths as $path) {
+            $end = strpos($output, "\n", $pos);
+            if ($end === false) {
+                throw new \RuntimeException('git cat-file stopped early.');
+            }
+            $header = substr($output, $pos, $end - $pos);
+            $pos = $end + 1;
+            $parts = explode(' ', $header);
+            if (count($parts) === 3 && ctype_digit($parts[2])) {
+                $size = (int) $parts[2];
+                $files[$path] = $parts[1] === 'blob' ? substr($output, $pos, $size) : null;
+                $pos += $size + 1;
+            } else {
+                $files[$path] = null; // missing or ambiguous
+            }
+        }
+        return $files;
     }
 
     /** Downloads new commits from the remote. Changes no local branch or file. */

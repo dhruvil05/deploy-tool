@@ -13,8 +13,8 @@ final class SiteStatus
      */
     public static function check(array $site, ?string $sourceCommit): array
     {
-        if ($site['type'] === 'ftp' && ($site['host'] === '' || $site['username'] === '' || $site['password'] === '')) {
-            return ['ok' => false, 'error' => 'FTP details are missing. Edit this site to add them.'];
+        if (($missing = Sites::missingLogin($site)) !== null) {
+            return ['ok' => false, 'error' => $missing];
         }
 
         $transport = Sites::transport($site);

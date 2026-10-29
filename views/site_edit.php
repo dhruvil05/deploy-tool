@@ -11,6 +11,7 @@ use DeployTool\Http;
 $hasError = static fn (string $field): string => isset($errors[$field]) ? ' has-error' : '';
 $error = static fn (string $field): string => isset($errors[$field]) ? '<p class="error-text">' . e($errors[$field]) . '</p>' : '';
 $isFolder = $site['type'] === 'folder';
+$type = $site['type'];
 ?>
 <h1><?= $originalKey === null ? 'Add site' : 'Edit ' . e($site['name']) ?></h1>
 
@@ -53,9 +54,53 @@ $isFolder = $site['type'] === 'folder';
     <div class="field">
         <label for="type">Where the site is</label>
         <select id="type" name="type" class="js-site-type">
-            <option value="ftp" <?= !$isFolder ? 'selected' : '' ?>>On a server (FTPS)</option>
+            <option value="ftp" <?= $type === 'ftp' ? 'selected' : '' ?>>On a server (FTPS)</option>
+            <option value="ssh" <?= $type === 'ssh' ? 'selected' : '' ?>>On a server (SSH, fastest)</option>
             <option value="folder" <?= $isFolder ? 'selected' : '' ?>>A folder on this computer (for testing)</option>
         </select>
+    </div>
+
+    <div class="js-type-group" data-type="ssh" <?= $type === 'ssh' ? '' : 'hidden' ?>>
+        <div class="field-row">
+            <div class="field<?= $hasError('ssh_host') ?>">
+                <label for="ssh_host">SSH host</label>
+                <input type="text" id="ssh_host" name="ssh_host" value="<?= e($site['ssh_host']) ?>">
+                <?= $error('ssh_host') ?>
+            </div>
+            <div class="field field-small<?= $hasError('ssh_port') ?>">
+                <label for="ssh_port">Port</label>
+                <input type="number" id="ssh_port" name="ssh_port" value="<?= (int) $site['ssh_port'] ?>" min="1" max="65535">
+                <?= $error('ssh_port') ?>
+            </div>
+        </div>
+
+        <div class="field<?= $hasError('ssh_user') ?>">
+            <label for="ssh_user">SSH username</label>
+            <input type="text" id="ssh_user" name="ssh_user" value="<?= e($site['ssh_user']) ?>">
+            <p class="help">On cPanel this is the cPanel account name, not an FTP sub-account.</p>
+            <?= $error('ssh_user') ?>
+        </div>
+
+        <div class="field<?= $hasError('ssh_key') ?>">
+            <label for="ssh_key">Private key file</label>
+            <input type="text" id="ssh_key" name="ssh_key" value="<?= e($site['ssh_key']) ?>" placeholder="C:\Users\you\.ssh\id_ed25519">
+            <p class="help">SSH sites log in with a key, never a password. The key must have no passphrase, and its public half must be added on the server (cPanel → SSH Access → Manage SSH Keys → Import, then Authorize). Leave blank to use your default key.</p>
+            <?= $error('ssh_key') ?>
+        </div>
+
+        <div class="field<?= $hasError('ssh_root') ?>">
+            <label for="ssh_root">Folder on the server</label>
+            <input type="text" id="ssh_root" name="ssh_root" value="<?= e($site['ssh_root']) ?>" placeholder="~/public_html/office">
+            <p class="help">The folder that holds index.php: a full path, or one starting with ~/ for your home folder.</p>
+            <?= $error('ssh_root') ?>
+        </div>
+
+        <div class="field<?= $hasError('ssh_php') ?>">
+            <label for="ssh_php">PHP command on the server</label>
+            <input type="text" id="ssh_php" name="ssh_php" value="<?= e($site['ssh_php']) ?>">
+            <p class="help">The tool runs a small helper with this command to read and write files in batches. Usually just php.</p>
+            <?= $error('ssh_php') ?>
+        </div>
     </div>
 
     <div class="js-type-group" data-type="folder" <?= $isFolder ? '' : 'hidden' ?>>
@@ -70,7 +115,7 @@ $isFolder = $site['type'] === 'folder';
         </div>
     </div>
 
-    <div class="js-type-group" data-type="ftp" <?= $isFolder ? 'hidden' : '' ?>>
+    <div class="js-type-group" data-type="ftp" <?= $type === 'ftp' ? '' : 'hidden' ?>>
         <div class="field-row">
             <div class="field<?= $hasError('host') ?>">
                 <label for="host">FTP host</label>
@@ -111,12 +156,19 @@ $isFolder = $site['type'] === 'folder';
             </label>
             <p class="help">Leave this off when the host is an IP address: the certificate can't match it. The connection is encrypted either way.</p>
         </div>
+
+        <div class="field field-small<?= $hasError('connections') ?>">
+            <label for="connections">Connections at once</label>
+            <input type="number" id="connections" name="connections" value="<?= (int) $site['connections'] ?>" min="1" max="<?= \DeployTool\FtpTransport::MAX_CONNECTIONS ?>">
+            <p class="help">Files are sent and checked over this many connections side by side. 4 is safe on most hosts; use 1 if the server limits connections.</p>
+            <?= $error('connections') ?>
+        </div>
     </div>
 
     <div class="field<?= $hasError('url') ?>">
         <label for="url">Site address</label>
         <input type="text" id="url" name="url" value="<?= e($site['url']) ?>" placeholder="https://">
-        <p class="help">Used for the site check after a deploy and by the fingerprint compare. Optional for folder sites.</p>
+        <p class="help">Used for the site check after a deploy and, on FTP sites, by the fingerprint compare. Optional for SSH and folder sites.</p>
         <?= $error('url') ?>
     </div>
 

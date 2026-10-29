@@ -53,7 +53,7 @@ use DeployTool\Sites;
 
 <table class="table">
     <thead>
-    <tr><th>Site</th><th>Gets code from</th><th>FTP login</th><th>Folder</th><th></th></tr>
+    <tr><th>Site</th><th>Gets code from</th><th>Login</th><th>Folder</th><th></th></tr>
     </thead>
     <tbody>
     <?php foreach ($sites as $key => $site): ?>
@@ -72,6 +72,12 @@ use DeployTool\Sites;
                     <?php endif ?>
                 </td>
                 <td><code><?= e($site['path']) ?></code></td>
+            <?php elseif ($site['type'] === 'ssh'): ?>
+                <td>
+                    <span class="badge badge-neutral">SSH</span>
+                    <?= e($site['ssh_user'] !== '' ? $site['ssh_user'] : '(no user)') ?>@<?= e($site['ssh_host'] !== '' ? $site['ssh_host'] : '(no host)') ?>:<?= (int) $site['ssh_port'] ?>
+                </td>
+                <td><code><?= e($site['ssh_root']) ?></code></td>
             <?php else: ?>
                 <td>
                     <?= e($site['username'] !== '' ? $site['username'] : '(no user)') ?>@<?= e($site['host'] !== '' ? $site['host'] : '(no host)') ?>:<?= (int) $site['port'] ?>

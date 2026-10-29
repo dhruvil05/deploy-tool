@@ -8,17 +8,18 @@ namespace DeployTool;
  * Compares a whole server with a commit, for servers with no recorded version (like prod
  * after copy-paste deploys). Two ways to read an FTP server:
  *
- *  - 'sizes': walk every folder over FTP and compare file sizes. Uploads nothing,
- *    but can't spot an edit that keeps the size, and Windows line endings show as different.
- *  - 'fingerprint': upload a temporary PHP file that lists git's hash of every file,
- *    call it once, delete it. Exact, and takes seconds.
+ *  - 'fingerprint' (the default): upload a temporary PHP file that lists git's hash of
+ *    every file, call it once, delete it. Exact, and takes seconds.
+ *  - 'sizes': walk every folder over FTP (several at once) and compare file sizes. Uploads
+ *    nothing, but can't spot an edit that keeps the size, and Windows line endings show as different.
  *
- * Folder sites are always fingerprinted directly.
+ * Folder sites are always fingerprinted directly, and SSH sites fingerprint themselves over SSH.
  */
 final class CompareRun
 {
     public const PHASES = [
         'walk' => 'Read the files',
+        'remote' => 'Fingerprint the server over SSH',
         'helper_upload' => 'Upload the fingerprint file',
         'helper_call' => 'Fingerprint the server',
         'helper_delete' => 'Delete the fingerprint file',
@@ -27,8 +28,12 @@ final class CompareRun
 
     public static function create(array $site, string $commit, string $method): array
     {
-        $method = $site['type'] === 'folder' ? 'fingerprint' : ($method === 'fingerprint' ? 'fingerprint' : 'sizes');
-        $first = $site['type'] === 'ftp' && $method === 'fingerprint' ? 'helper_upload' : 'walk';
+        $method = $site['type'] === 'ftp' && $method === 'sizes' ? 'sizes' : 'fingerprint';
+        $first = match (true) {
+            $site['type'] === 'ssh' => 'remote',
+            $site['type'] === 'ftp' && $method === 'fingerprint' => 'helper_upload',
+            default => 'walk',
+        };
         $run = Runner::newRun('compare', $site, $first) + [
             'method' => $method,
             'site_type' => $site['type'],
@@ -48,9 +53,11 @@ final class CompareRun
     /** The phases this compare goes through, for the progress list. */
     public static function phases(array $run): array
     {
-        $keys = $run['site_type'] === 'ftp' && $run['method'] === 'fingerprint'
-            ? ['helper_upload', 'helper_call', 'helper_delete', 'analyze']
-            : ['walk', 'analyze'];
+        $keys = match (true) {
+            $run['site_type'] === 'ssh' => ['remote', 'analyze'],
+            $run['site_type'] === 'ftp' && $run['method'] === 'fingerprint' => ['helper_upload', 'helper_call', 'helper_delete', 'analyze'],
+            default => ['walk', 'analyze'],
+        };
         return array_intersect_key(self::PHASES, array_flip($keys));
     }
 
@@ -58,6 +65,7 @@ final class CompareRun
     {
         match ($run['phase']) {
             'walk' => self::walk($run, $context, $deadline),
+            'remote' => self::remote($run, $context),
             'helper_upload' => self::helperUpload($run, $context),
             'helper_call' => self::helperCall($run, $context),
             'helper_delete' => self::helperDelete($run, $context),
@@ -107,7 +115,10 @@ final class CompareRun
         return DeployRun::create($site, 'sync', null, $files, $compare['to'], $compare['id']);
     }
 
-    /** Reads folder by folder, a few seconds per step. Folder sites are fingerprinted, FTP sites give sizes. */
+    /**
+     * Reads a batch of folders at a time (FTP lists them side by side). Folder sites are
+     * fingerprinted, FTP sites give sizes.
+     */
     private static function walk(array &$run, RunContext $context, float $deadline): void
     {
         $regexes = $context->protectedRegexes();
@@ -117,20 +128,35 @@ final class CompareRun
             if (microtime(true) >= $deadline) {
                 return;
             }
-            $dir = (string) array_shift($run['queue']);
-            foreach ($transport->listDetailed($dir) as $name => $entry) {
-                $path = $dir === '' ? (string) $name : $dir . '/' . $name;
-                if ($entry['dir']) {
-                    if (!ProtectedPaths::matches($path . '/', $regexes)) {
-                        $run['queue'][] = $path;
+            $dirs = array_map('strval', array_splice($run['queue'], 0, $transport->batchSize()));
+            foreach ($transport->listDetailedMany($dirs) as $dir => $entries) {
+                $dir = (string) $dir;
+                foreach ($entries as $name => $entry) {
+                    $path = $dir === '' ? (string) $name : $dir . '/' . $name;
+                    if ($entry['dir']) {
+                        if (!ProtectedPaths::matches($path . '/', $regexes)) {
+                            $run['queue'][] = $path;
+                        }
+                    } elseif (!ProtectedPaths::matches($path, $regexes) && !str_ends_with($path, '.dtup')) {
+                        $run['server'][$path] = $fingerprint ? Fingerprint::of((string) $transport->get($path)) : ['size' => $entry['size']];
                     }
-                } elseif (!ProtectedPaths::matches($path, $regexes) && !str_ends_with($path, '.dtup')) {
-                    $run['server'][$path] = $fingerprint ? Fingerprint::of((string) $transport->get($path)) : ['size' => $entry['size']];
                 }
+                $run['dirs_scanned']++;
             }
-            $run['dirs_scanned']++;
         }
         Runner::log($run, 'info', "Read {$run['dirs_scanned']} folder(s), " . count($run['server']) . ' file(s).');
+        $run['phase'] = 'analyze';
+    }
+
+    /** SSH sites: the server fingerprints every file itself, in one call. */
+    private static function remote(array &$run, RunContext $context): void
+    {
+        $transport = $context->transport();
+        if (!$transport instanceof SshTransport) {
+            throw new \RuntimeException('This site is no longer an SSH site. Start a new compare.');
+        }
+        $run['server'] = $transport->fingerprintAll($context->protectedRegexes());
+        Runner::log($run, 'info', 'The server listed ' . count($run['server']) . ' file(s).');
         $run['phase'] = 'analyze';
     }
 

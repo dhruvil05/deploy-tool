@@ -26,7 +26,7 @@ $checkout = Sites::checkoutStatus($site);
         <?php if ($site['url'] !== ''): ?>
             <a href="<?= e($site['url']) ?>" target="_blank" rel="noopener noreferrer"><?= e($site['url']) ?></a>
         <?php else: ?>
-            <?= e($site['path']) ?>
+            <?= e($site['type'] === 'ssh' ? $site['ssh_host'] . ':' . $site['ssh_root'] : $site['path']) ?>
         <?php endif ?>
         <?php if ($checkout !== null): ?>
             <span class="tip" tabindex="0" aria-label="Warning: this folder is a git checkout">

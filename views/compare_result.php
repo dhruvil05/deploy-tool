@@ -6,8 +6,28 @@
  */
 
 use DeployTool\Http;
+use DeployTool\ProtectedPaths;
+use DeployTool\ProtectPicker;
+use DeployTool\RunStore;
+use DeployTool\Sources;
 
 $result = $run['result'];
+
+// Extra files grouped by the folder git doesn't have, each with a Protect button.
+$extraGroups = null;
+$regexes = [];
+if ($result['extra']) {
+    try {
+        $source = RunStore::source($run);
+        $git = Sources::git($source);
+        if ($git->resolve($run['to']) !== null) {
+            $extraGroups = ProtectPicker::groupServerOnly($result['extra'], ProtectPicker::foldersAt($git, $run['to']));
+            $regexes = ProtectedPaths::regexes($source);
+        }
+    } catch (\RuntimeException) {
+        $extraGroups = null; // plain list below
+    }
+}
 $issues = count($result['differs']) + count($result['missing']);
 $isSizes = $result['method'] === 'sizes';
 $lists = [
@@ -35,9 +55,31 @@ $hidden = '<input type="hidden" name="_csrf" value="' . e(Http::csrfToken()) . '
 
     <?php foreach ($lists as $key => [$label, $help]): ?>
         <?php if (!empty($result[$key])): ?>
-            <details class="card section">
+            <details class="card section" id="<?= e($key) ?>" <?= $key === 'extra' && ($_GET['open'] ?? '') === 'extra' ? 'open' : '' ?>>
                 <summary><?= e($label) ?> (<?= count($result[$key]) ?>)</summary>
                 <p class="meta"><?= e($help) ?></p>
+                <?php if ($key === 'extra' && $extraGroups !== null): ?>
+                    <p class="meta">Grouped by the folder git doesn't have. Protect server data (uploads, generated files, vendor folders) so compares and deploys skip it.</p>
+                    <ul class="extra-groups">
+                        <?php foreach (array_slice($extraGroups, 0, 100, true) as $rule => $paths): ?>
+                            <?php $rule = (string) $rule; ?>
+                            <li>
+                                <code><?= e($rule) ?></code>
+                                <span class="meta"><?= count($paths) ?> file<?= count($paths) === 1 ? '' : 's' ?></span>
+                                <?php if (ProtectedPaths::matches($rule, $regexes)): ?>
+                                    <span class="badge badge-success">Protected</span>
+                                <?php else: ?>
+                                    <form method="post" action="index.php?r=protect-add" class="inline">
+                                        <?= $hidden ?>
+                                        <input type="hidden" name="rule" value="<?= e($rule) ?>">
+                                        <button type="submit" class="small">Protect</button>
+                                    </form>
+                                <?php endif ?>
+                            </li>
+                        <?php endforeach ?>
+                    </ul>
+                    <p class="meta">Every path:</p>
+                <?php endif ?>
                 <ul class="path-list">
                     <?php foreach (array_slice($result[$key], 0, 500) as $path): ?>
                         <li><code><?= e($path) ?></code></li>

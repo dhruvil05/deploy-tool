@@ -64,7 +64,8 @@
         });
     });
 
-    // Run page: keep stepping the run until it stops running, then reload to show the result.
+    // Run page: show progress until the run stops running, then reload to show the result.
+    // A background worker normally does the work; without one, each call does a step.
     const live = document.getElementById('run-live');
     if (live) {
         const phase = live.querySelector('.js-phase');
@@ -95,7 +96,7 @@
                 }
                 render(data);
                 if (data.status === 'running') {
-                    setTimeout(step, data.busy ? 1500 : 100);
+                    setTimeout(step, data.worker ? 1000 : (data.busy ? 1500 : 100));
                 } else {
                     window.location.reload();
                 }
@@ -158,6 +159,314 @@
         siteType.addEventListener('change', sync);
         sync();
     }
+
+    // Local form: the Protected paths panel beside it. It shows this local's rules with how
+    // much each covers, and adds more from compares, suggestions or the folder tree. Every
+    // change goes into the form's textarea, which is saved with the form.
+    const localForm = document.querySelector('.js-local-form');
+    const panel = document.querySelector('.js-protect');
+    if (localForm && panel) {
+        const textarea = document.getElementById('extra_protected');
+        const ruleList = panel.querySelector('.js-rule-list');
+        const ruleCount = panel.querySelector('.js-rule-count');
+        const status = panel.querySelector('.js-protect-status');
+        const tabs = [...panel.querySelectorAll('.js-tab')];
+        const panes = Object.fromEntries([...panel.querySelectorAll('.js-panel')].map((pane) => [pane.dataset.tab, pane]));
+        const search = panel.querySelector('.js-picker-search');
+        const unsaved = panel.querySelector('.js-unsaved');
+        const saved = textarea.value;
+        const bigFolder = 500; // ask before protecting this many files at once
+        const expanded = new Set();
+        let showFiles = false;
+        let current = null;
+        let data = null;
+        let children = new Map(); // parent folder ('' = top) => [[folder, files], ...]
+        let request = 0;
+
+        const escape = (text) => text.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+        // Same matching as ProtectedPaths::regex() on the server.
+        const toRegex = (rule) => new RegExp('^' + rule.split('*').map(escape).join('[^/]+') + (rule.endsWith('/') ? '' : '$'), 'i');
+        const typedRules = () => textarea.value.split(/\r?\n/)
+            .map((line) => line.trim().replace(/\\/g, '/').replace(/^\/+/, ''))
+            .filter(Boolean);
+        // The rule that already protects a path, other than the path's own typed rule (which its tick removes).
+        const coveredBy = (path) => (data ? data.builtIn : []).find((rule) => toRegex(rule).test(path))
+            || typedRules().find((rule) => rule !== path && toRegex(rule).test(path))
+            || null;
+        const files = (count) => `${count.toLocaleString()} file${count === 1 ? '' : 's'}`;
+        // Long paths keep their start and end: "application/…/Serializer/HTML/x.ser".
+        const shorten = (path) => {
+            if (path.length <= 52) {
+                return path;
+            }
+            const parts = path.split('/');
+            const tail = parts.slice(-2).join('/');
+            return tail.length > 46 ? '…' + path.slice(-46) : parts[0] + '/…/' + tail;
+        };
+        const el = (tag, className, text) => {
+            const node = document.createElement(tag);
+            if (className) {
+                node.className = className;
+            }
+            if (text !== undefined) {
+                node.textContent = text;
+            }
+            return node;
+        };
+
+        const setRules = (rules) => {
+            textarea.value = rules.join('\n');
+            textarea.dispatchEvent(new Event('input'));
+        };
+        const toggle = (rule, on, count) => {
+            const rules = typedRules().filter((line) => line !== rule);
+            if (on) {
+                if (count >= bigFolder && !window.confirm(`${rule} has ${files(count)} in git. Protecting it means none of them are ever uploaded to this local's sites. Protect it?`)) {
+                    return false;
+                }
+                rules.push(rule);
+            }
+            setRules(rules);
+            return true;
+        };
+
+        // One pickable path: [▸] [✓] path  12 files  (covered by …)
+        const pickRow = (rule, count, { depth = null, folder = null, title = '' } = {}) => {
+            const item = el('li', 'pick-row');
+            if (depth !== null) {
+                item.style.paddingLeft = (depth * 16) + 'px';
+                if (children.has(folder)) {
+                    const open = expanded.has(folder);
+                    const button = el('button', 'pick-expand', open ? '▾' : '▸');
+                    button.type = 'button';
+                    button.setAttribute('aria-label', (open ? 'Close ' : 'Open ') + folder);
+                    button.addEventListener('click', () => {
+                        open ? expanded.delete(folder) : expanded.add(folder);
+                        render();
+                    });
+                    item.append(button);
+                } else {
+                    item.append(el('span', 'pick-expand'));
+                }
+            }
+            const label = el('label', 'pick-label');
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            const cover = coveredBy(rule);
+            box.checked = cover !== null || typedRules().includes(rule);
+            box.disabled = cover !== null;
+            box.addEventListener('change', () => {
+                if (!toggle(rule, box.checked, count)) {
+                    box.checked = !box.checked;
+                }
+            });
+            const name = depth !== null ? rule.slice(rule.slice(0, -1).lastIndexOf('/') + 1) : shorten(rule);
+            const path = el('span', 'pick-path', name);
+            path.title = rule + (title ? ' · ' + title : '');
+            label.append(box, path);
+            item.append(label, el('span', 'pill', files(count)));
+            if (cover !== null) {
+                const via = el('span', 'pick-via', 'covered');
+                via.title = 'Already protected by ' + cover;
+                item.append(via);
+            }
+            return item;
+        };
+
+        const renderRules = () => {
+            const counts = new Map((data ? data.rules : []).map(([rule, inGit, onServer, fix]) => [rule, { inGit, onServer, fix }]));
+            const rules = typedRules();
+            ruleCount.textContent = rules.length;
+            if (!rules.length) {
+                ruleList.replaceChildren(el('li', 'meta', 'Nothing yet. Tick paths below to add them.'));
+                return;
+            }
+            ruleList.replaceChildren(...rules.map((rule) => {
+                const info = counts.get(rule);
+                const item = el('li', 'rule-row');
+                const path = el('code', 'rule-path', shorten(rule));
+                path.title = rule;
+                item.append(path);
+                if (!info) {
+                    item.append(el('span', 'pill', '…'));
+                } else if (info.inGit + info.onServer > 0) {
+                    const pill = el('span', 'pill', files(info.inGit + info.onServer));
+                    pill.title = `${files(info.inGit)} in git, ${files(info.onServer)} only on servers`;
+                    item.append(pill);
+                } else {
+                    item.classList.add('rule-bad');
+                    item.append(el('span', 'pill pill-warning', 'matches nothing'));
+                    if (info.fix) {
+                        const fix = el('button', 'small', `Use ${info.fix}`);
+                        fix.type = 'button';
+                        fix.title = 'A folder needs a / at the end';
+                        fix.addEventListener('click', () => setRules(typedRules().map((line) => (line === rule ? info.fix : line))));
+                        item.append(fix);
+                    }
+                }
+                const remove = el('button', 'rule-remove', '×');
+                remove.type = 'button';
+                remove.setAttribute('aria-label', 'Remove ' + rule);
+                remove.title = 'Remove';
+                remove.addEventListener('click', () => setRules(typedRules().filter((line) => line !== rule)));
+                item.append(remove);
+                return item;
+            }));
+        };
+
+        const renderServer = () => {
+            const list = panes.server.querySelector('.pick-rows');
+            const folders = data.server.filter(([rule]) => rule.endsWith('/'));
+            const singles = data.server.filter(([rule]) => !rule.endsWith('/'));
+            const rows = folders.map(([rule, count, sites]) => pickRow(rule, count, { title: 'on ' + sites.join(', ') }));
+            if (singles.length) {
+                const item = el('li', 'pick-row');
+                const button = el('button', 'pick-more', (showFiles ? '▾ ' : '▸ ') + `${singles.length} single file${singles.length === 1 ? '' : 's'}`);
+                button.type = 'button';
+                button.addEventListener('click', () => {
+                    showFiles = !showFiles;
+                    render();
+                });
+                item.append(button);
+                rows.push(item);
+                if (showFiles) {
+                    rows.push(...singles.map(([rule, count, sites]) => pickRow(rule, count, { title: 'on ' + sites.join(', ') })));
+                }
+            }
+            list.replaceChildren(...rows);
+            if (!rows.length) {
+                list.replaceChildren(el('li', 'meta', 'No compare has found server-only files yet. Run a Compare on one of this local\'s sites.'));
+            }
+        };
+
+        const renderSuggest = () => {
+            const folderFiles = new Map(data.folders);
+            const list = panes.suggest.querySelector('.pick-rows');
+            list.replaceChildren(...data.suggestions.map((rule) => pickRow(rule, folderFiles.get(rule.slice(0, -1)) || 0)));
+            if (!data.suggestions.length) {
+                list.replaceChildren(el('li', 'meta', 'Nothing to suggest: the usual folders are already protected.'));
+            }
+        };
+
+        const renderTree = () => {
+            const query = search.value.trim().toLowerCase();
+            const rows = [];
+            if (query) {
+                for (const [folder, count] of data.folders) {
+                    if (folder.toLowerCase().includes(query)) {
+                        rows.push(pickRow(folder + '/', count));
+                        if (rows.length >= 200) {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                const add = (parent, depth) => {
+                    for (const [folder, count] of children.get(parent) || []) {
+                        rows.push(pickRow(folder + '/', count, { depth, folder }));
+                        if (expanded.has(folder)) {
+                            add(folder, depth + 1);
+                        }
+                    }
+                };
+                add('', 0);
+            }
+            const list = panes.browse.querySelector('.pick-rows');
+            list.replaceChildren(...rows);
+            if (!rows.length) {
+                list.replaceChildren(el('li', 'meta', 'No folder matches.'));
+            }
+        };
+
+        const show = (name) => {
+            current = name;
+            tabs.forEach((tab) => tab.setAttribute('aria-selected', String(tab.dataset.tab === name)));
+            Object.entries(panes).forEach(([key, pane]) => { pane.hidden = !data || key !== name; });
+        };
+
+        const render = () => {
+            renderRules();
+            unsaved.hidden = textarea.value === saved;
+            if (!data) {
+                return;
+            }
+            const unprotected = (rules) => rules.filter((rule) => coveredBy(rule) === null && !typedRules().includes(rule)).length;
+            tabs[0].querySelector('.js-tab-count').textContent = unprotected(data.server.map(([rule]) => rule)) || '';
+            tabs[1].querySelector('.js-tab-count').textContent = unprotected(data.suggestions) || '';
+            renderServer();
+            renderSuggest();
+            renderTree();
+        };
+
+        // Typed or ticked rules are counted again by the server; folders are only reloaded
+        // when the repository or branch changes.
+        const load = async (withFolders) => {
+            const mine = ++request;
+            if (withFolders) {
+                status.textContent = 'Loading the repository\'s folders…';
+                status.hidden = false;
+            }
+            try {
+                const response = await fetch('index.php?r=protect-info', {
+                    method: 'POST',
+                    headers: { Accept: 'application/json' },
+                    body: new FormData(localForm),
+                });
+                const answer = await response.json();
+                if (mine !== request) {
+                    return;
+                }
+                if (!answer.ok) {
+                    data = null;
+                    status.textContent = answer.error;
+                    status.hidden = false;
+                    show(current);
+                    render();
+                    return;
+                }
+                if (withFolders || !data) {
+                    children = new Map();
+                    for (const entry of answer.folders) {
+                        const slash = entry[0].lastIndexOf('/');
+                        const parent = slash < 0 ? '' : entry[0].slice(0, slash);
+                        if (!children.has(parent)) {
+                            children.set(parent, []);
+                        }
+                        children.get(parent).push(entry);
+                    }
+                }
+                data = answer;
+                status.hidden = true;
+                panel.querySelector('.js-picker-ref').textContent = `Folders in git at ${answer.ref}.`;
+                show(current || (answer.server.some(([rule]) => rule.endsWith('/')) ? 'server' : 'browse'));
+                render();
+            } catch (error) {
+                if (mine === request) {
+                    status.textContent = 'Could not load the folders. Check that the tool is still running.';
+                    status.hidden = false;
+                }
+            }
+        };
+
+        tabs.forEach((tab) => tab.addEventListener('click', () => show(tab.dataset.tab)));
+        let timer = null;
+        textarea.addEventListener('input', () => {
+            render(); // ticks and the rule list follow the text right away
+            clearTimeout(timer);
+            timer = setTimeout(() => load(false), 500);
+        });
+        ['repo_path', 'branch'].forEach((field) => localForm.querySelector('#' + field).addEventListener('change', () => load(true)));
+        search.addEventListener('input', () => data && renderTree());
+        render();
+        load(true);
+    }
+
+    // "Restore the default list" and similar: put a stored value into a field (saved with the form).
+    document.querySelectorAll('.js-fill').forEach((button) => {
+        button.addEventListener('click', () => {
+            document.getElementById(button.dataset.target).value = button.dataset.fill;
+        });
+    });
 
     // Slow actions (like fetching from GitHub): show they are running and block double clicks.
     document.querySelectorAll('form.js-busy').forEach((form) => {

@@ -85,7 +85,7 @@ final class Sources
             'branch' => trim((string) ($input['branch'] ?? '')),
             'remote' => trim((string) ($input['remote'] ?? '')),
             'extra_protected' => implode("\n", array_filter(array_map(
-                static fn (string $line): string => ltrim(trim(str_replace('\\', '/', $line)), '/'),
+                [ProtectedPaths::class, 'normalize'],
                 preg_split('/\r?\n/', (string) ($input['extra_protected'] ?? ''))
             ))),
         ];
@@ -125,6 +125,24 @@ final class Sources
             JsonStore::write('sources', $sources);
         }
         return [$errors, $source];
+    }
+
+    /** Adds one rule to a local's own protected paths (no change when it's already there). */
+    public static function addProtected(string $key, string $rule): void
+    {
+        $sources = self::all();
+        $rule = ProtectedPaths::normalize($rule);
+        if (!isset($sources[$key])) {
+            throw new \RuntimeException('This local no longer exists.');
+        }
+        if ($rule === '' || str_contains($rule, '..') || str_contains($rule, "\n")) {
+            throw new \RuntimeException('That is not a path the tool can protect.');
+        }
+        if (in_array($rule, ProtectedPaths::rules($sources[$key]), true)) {
+            return;
+        }
+        $sources[$key]['extra_protected'] = trim($sources[$key]['extra_protected'] . "\n" . $rule);
+        JsonStore::write('sources', $sources);
     }
 
     /** Returns an error message, or null when deleted. */

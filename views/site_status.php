@@ -14,7 +14,7 @@
     <span class="badge badge-success">Connected</span>
     <?php if (!$status['looks_like_app']): ?>
         <span class="badge badge-warning">No index.php or application/ here</span>
-        <p class="meta">For the backoffice this means the <?= $site['type'] === 'folder' ? 'folder' : 'FTP folder' ?> setting is probably wrong. Other kinds of projects can ignore this.</p>
+        <p class="meta">For the backoffice this means the <?= ['folder' => 'folder', 'ssh' => 'folder on the server'][$site['type']] ?? 'FTP folder' ?> setting is probably wrong. Other kinds of projects can ignore this.</p>
     <?php endif ?>
 
     <?php if ($status['state'] === null): ?>

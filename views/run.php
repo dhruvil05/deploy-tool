@@ -31,7 +31,12 @@ $commitText = static fn (?array $info): string => $info === null ? 'none' : shor
 <p class="lead">
     <?php if ($run['type'] === 'compare'): ?>
         Compared with <code><?= e($commitText($toInfo)) ?></code>
-        · <?= $run['site_type'] === 'folder' ? 'folder fingerprints' : ($run['method'] === 'fingerprint' ? 'fingerprint file' : 'file sizes over FTP') ?>
+        · <?= match (true) {
+            $run['site_type'] === 'folder' => 'folder fingerprints',
+            $run['site_type'] === 'ssh' => 'fingerprints over SSH',
+            $run['method'] === 'fingerprint' => 'fingerprint file',
+            default => 'file sizes over FTP',
+        } ?>
     <?php else: ?>
         From <code><?= e($commitText($fromInfo)) ?></code> to <code><?= e($commitText($toInfo)) ?></code>
     <?php endif ?>
@@ -57,7 +62,7 @@ $commitText = static fn (?array $info): string => $info === null ? 'none' : shor
         <p class="live-head"><strong class="js-phase"><?= e($phases[$run['phase']] ?? $run['phase']) ?></strong> <span class="meta js-count"></span></p>
         <progress class="js-progress" max="1" value="0"></progress>
         <ul class="log js-log"></ul>
-        <p class="meta">Keep this page open. If you close it, the run waits and carries on when you open it again.</p>
+        <p class="meta">This runs in the background: you can close or reload this page and come back later.</p>
         <?= $post('run-stop', 'Stop', 'danger') ?>
     </section>
 <?php endif ?>

@@ -1,7 +1,7 @@
 # Deploy tool
 
 A small local web app that deploys the backoffice from the `staging-latest` branch
-to the staging site, and from the staging site to prod, over FTPS.
+to the staging site, and from the staging site to prod, over FTPS or SSH.
 
 It runs only on this computer. It is never uploaded to staging or prod.
 
@@ -36,7 +36,20 @@ when, and who deployed it. The app's own `application/.htaccess` blocks it from 
 - **Rollback**: puts back the backed-up files, removes added ones, restores the recorded version.
 - **History**: every run with its files, log and CSV export.
 
-Runs move forward while their page is open. Close it and the run waits; open it and it continues.
+Runs work in the background (a hidden `php src/run-worker.php` process per run), so you can
+close or reload the page. If a worker can't be started, the page does the work itself as before,
+and `storage/worker.log` says why.
+
+## Fast transfers
+
+- **SSH sites** (fastest): the tool copies a small helper to `~/.deploy-tool/` on the server
+  (outside the web folder) and sends hundreds of files per SSH connection. Each file is written
+  to a temp name, then renamed to its own path. A compare is one call. It needs a key login with
+  no passphrase (cPanel → SSH Access → Manage SSH Keys) and PHP on the server.
+- **FTP sites**: files go over several connections at once ("Connections at once", default 4).
+  A file that fails there is tried again on its own.
+- **Compare** uses the fingerprint file by default. "File sizes over FTP" is still there for when
+  the fingerprint file can't run.
 
 Protected paths (uploads, module uploads, media, app-config.php, .htaccess, …) are never
 uploaded, overwritten, deleted or read. See Settings.

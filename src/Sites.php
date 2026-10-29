@@ -7,10 +7,13 @@ namespace DeployTool;
 /**
  * Deploy targets. Each site gets its code from a local ('local:<key>', a repository and
  * branch on this computer) or from the commit another site runs ('site:<key>').
- * A site is reached over FTPS ('ftp') or is a folder on this computer ('folder', for testing).
+ * A site is reached over FTPS ('ftp'), over SSH ('ssh'), or is a folder on this computer
+ * ('folder', for testing).
  */
 final class Sites
 {
+    public const TYPES = ['ftp', 'ssh', 'folder'];
+
     private const BLANK = [
         'key' => '',
         'name' => '',
@@ -24,6 +27,13 @@ final class Sites
         'password' => '',
         'root' => '/',
         'verify_tls' => false,
+        'connections' => 4,
+        'ssh_host' => '',
+        'ssh_port' => 22,
+        'ssh_user' => '',
+        'ssh_key' => '',
+        'ssh_root' => '',
+        'ssh_php' => 'php',
         'path' => '',
         'url' => '',
         'check_path' => '/admin/authentication',
@@ -77,7 +87,21 @@ final class Sites
 
     public static function transport(array $site): Transport
     {
-        return $site['type'] === 'folder' ? new FolderTransport($site['path']) : new FtpTransport($site);
+        return match ($site['type']) {
+            'folder' => new FolderTransport($site['path']),
+            'ssh' => new SshTransport($site),
+            default => new FtpTransport($site),
+        };
+    }
+
+    /** What is missing before this site can be reached, or null when nothing is. */
+    public static function missingLogin(array $site): ?string
+    {
+        return match ($site['type']) {
+            'ftp' => $site['host'] === '' || $site['username'] === '' || $site['password'] === '' ? 'FTP details are missing. Edit this site to add them.' : null,
+            'ssh' => $site['ssh_host'] === '' || $site['ssh_user'] === '' || $site['ssh_root'] === '' ? 'SSH details are missing. Edit this site to add them.' : null,
+            default => null,
+        };
     }
 
     /** The local at the start of this site's pipeline. */
@@ -322,7 +346,7 @@ final class Sites
         $site = [
             'key' => $originalKey ?? strtolower(trim((string) ($input['key'] ?? ''))),
             'name' => trim((string) ($input['name'] ?? '')),
-            'type' => ($input['type'] ?? '') === 'folder' ? 'folder' : 'ftp',
+            'type' => in_array($input['type'] ?? '', self::TYPES, true) ? $input['type'] : 'ftp',
             'source' => (string) ($input['source'] ?? ''),
             'production' => !empty($input['production']),
             'hidden' => $existing['hidden'] ?? false,
@@ -332,6 +356,13 @@ final class Sites
             'password' => (string) ($input['password'] ?? ''),
             'root' => rtrim('/' . trim(trim((string) ($input['root'] ?? '')), '/'), '/') . '/',
             'verify_tls' => !empty($input['verify_tls']),
+            'connections' => (int) ($input['connections'] ?? 4),
+            'ssh_host' => trim((string) ($input['ssh_host'] ?? '')),
+            'ssh_port' => (int) ($input['ssh_port'] ?? 22),
+            'ssh_user' => trim((string) ($input['ssh_user'] ?? '')),
+            'ssh_key' => trim((string) ($input['ssh_key'] ?? '')),
+            'ssh_root' => rtrim(trim((string) ($input['ssh_root'] ?? '')), '/'),
+            'ssh_php' => trim((string) ($input['ssh_php'] ?? '')) ?: 'php',
             'path' => rtrim(trim((string) ($input['path'] ?? '')), '\\/'),
             'url' => rtrim(trim((string) ($input['url'] ?? '')), '/'),
             'check_path' => trim((string) ($input['check_path'] ?? '')),
@@ -361,9 +392,31 @@ final class Sites
             } elseif (!isset($errors['source']) && self::isInsideOwnLocal($site)) {
                 $errors['path'] = 'This folder is inside the repository this site gets its code from. Deploying here would overwrite your working files. Use a separate copy.';
             }
+        } elseif ($site['type'] === 'ssh') {
+            if (!preg_match('/^[a-z0-9.-]+$/i', $site['ssh_host'])) {
+                $errors['ssh_host'] = 'Enter the SSH host name or IP address.';
+            }
+            if ($site['ssh_port'] < 1 || $site['ssh_port'] > 65535) {
+                $errors['ssh_port'] = 'Enter a port between 1 and 65535.';
+            }
+            if (!preg_match('/^[a-z0-9_][a-z0-9_.-]*$/i', $site['ssh_user'])) {
+                $errors['ssh_user'] = 'Enter the SSH username (letters, numbers, dots, dashes or underscores).';
+            }
+            if ($site['ssh_key'] !== '' && !is_file($site['ssh_key'])) {
+                $errors['ssh_key'] = 'File not found.';
+            }
+            if ($site['ssh_root'] === '' || !preg_match('#^(/|~/)[\w./~-]*$#', $site['ssh_root']) || str_contains($site['ssh_root'], '..')) {
+                $errors['ssh_root'] = 'Enter the folder that holds index.php, starting with / or ~/, for example ~/public_html/office.';
+            }
+            if (!preg_match('#^[\w./-]+$#', $site['ssh_php'])) {
+                $errors['ssh_php'] = 'Enter a command without spaces, for example php or /usr/local/bin/php.';
+            }
         } else {
             if (!preg_match('/^[a-z0-9.-]+$/i', $site['host'])) {
                 $errors['host'] = 'Enter the FTP host name or IP address.';
+            }
+            if ($site['connections'] < 1 || $site['connections'] > FtpTransport::MAX_CONNECTIONS) {
+                $errors['connections'] = 'Enter a number from 1 to ' . FtpTransport::MAX_CONNECTIONS . '.';
             }
             if ($site['port'] < 1 || $site['port'] > 65535) {
                 $errors['port'] = 'Enter a port between 1 and 65535.';

@@ -22,6 +22,8 @@ final class Controller
             'source-edit' => $this->sourceEdit(),
             'source-save' => $this->sourceSave(),
             'source-delete' => $this->sourceDelete(),
+            'protect-info' => $this->protectInfo(),
+            'protect-add' => $this->protectAdd(),
             'settings' => $this->settings(),
             'settings-save' => $this->settingsSave(),
             default => (new RunController())->handle($route),
@@ -38,12 +40,16 @@ final class Controller
                 $locals[$key] = ['source' => $source, 'error' => $e->getMessage()];
             }
         }
+        $openRuns = RunStore::open();
+        foreach ($openRuns as $run) {
+            Worker::ensure($run); // picks up runs whose worker ended, for example after a restart
+        }
         View::render('dashboard', [
             'page' => 'dashboard',
             'locals' => $locals,
             'layout' => Sites::pipelines(),
             'nameMissing' => Settings::get('deployer_name') === '',
-            'openRuns' => RunStore::open(),
+            'openRuns' => $openRuns,
         ], 'Dashboard');
     }
 
@@ -171,7 +177,7 @@ final class Controller
             return;
         }
         Http::flash('success', "Local {$source['name']} saved.");
-        Http::redirect('r=sites');
+        Http::redirect('r=source-edit&key=' . urlencode($source['key'])); // stay, to keep adjusting protected paths
     }
 
     private function sourceDelete(): void
@@ -180,6 +186,43 @@ final class Controller
         $error = Sources::delete((string) ($_POST['key'] ?? ''));
         Http::flash($error === null ? 'success' : 'danger', $error ?? 'Local deleted.');
         Http::redirect('r=sites');
+    }
+
+    /** The folder picker on the local form: folders, rule counts, server-only folders (JSON). */
+    private function protectInfo(): void
+    {
+        Http::requirePost();
+        session_write_close();
+        $key = (string) ($_POST['original_key'] ?? '');
+        $source = [
+            'repo_path' => rtrim(trim((string) ($_POST['repo_path'] ?? '')), '\\/'),
+            'branch' => trim((string) ($_POST['branch'] ?? '')),
+            'extra_protected' => (string) ($_POST['extra_protected'] ?? ''),
+        ];
+        if ($source['repo_path'] === '' || !is_dir($source['repo_path'])) {
+            Http::json(['ok' => false, 'error' => 'Enter the repository folder to see its folders.']);
+        }
+        try {
+            Http::json(ProtectPicker::info($source, Sources::get($key) !== null ? $key : null));
+        } catch (\RuntimeException $e) {
+            Http::json(['ok' => false, 'error' => $e->getMessage()]);
+        }
+    }
+
+    /** "Protect" on a compare result: adds the rule to the local the compare used. */
+    private function protectAdd(): void
+    {
+        Http::requirePost();
+        $run = RunStore::load((string) ($_POST['id'] ?? ''));
+        $source = RunStore::source($run);
+        $rule = (string) ($_POST['rule'] ?? '');
+        try {
+            Sources::addProtected($source['key'], $rule);
+            Http::flash('success', "Protected $rule for {$source['name']}: it is never uploaded, deleted or read on its sites.");
+        } catch (\RuntimeException $e) {
+            Http::flash('danger', $e->getMessage());
+        }
+        Http::redirect('r=run&id=' . urlencode($run['id']) . '&open=extra#extra');
     }
 
     private function settings(): void
@@ -228,6 +271,7 @@ final class Controller
             'errors' => $errors,
             'gitBinary' => Settings::gitBinary($values['git_path'] ?? ''),
             'phpBinary' => Settings::phpBinary($values['php_path'] ?? ''),
+            'sshBinary' => Settings::sshBinary($values['ssh_path'] ?? ''),
         ], 'Settings');
     }
 }

@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace DeployTool;
 
 /**
- * Moves runs forward a few seconds at a time. The run page calls step() over and over,
- * so nothing depends on PHP time limits or background processes. If the page is closed,
- * the run waits and continues when the page is opened again.
+ * Moves runs forward a few seconds at a time. Normally a background Worker calls step()
+ * until the run stops running, so closing or reloading the page changes nothing. When no
+ * worker can be started, the run page calls step() itself, over and over.
  *
  * Every step is safe to repeat: uploading the same file twice or deleting a file
  * that is already gone changes nothing.
@@ -16,7 +16,11 @@ final class Runner
 {
     private const STEP_SECONDS = 8.0;
 
-    public static function step(string $id): array
+    /**
+     * $context lets a worker keep its connections between steps: pass the same variable
+     * every time (null the first time). It is reset after an error.
+     */
+    public static function step(string $id, ?RunContext &$context = null): array
     {
         RunStore::load($id); // validates the id
         $lock = fopen(RunStore::dir() . "/$id.lock", 'c');
@@ -34,7 +38,7 @@ final class Runner
             $stopFile = self::stopFile($id);
             try {
                 $site = Sites::get($run['site']) ?? throw new \RuntimeException('This site no longer exists.');
-                $context = new RunContext($site, $run);
+                $context ??= new RunContext($site, $run);
                 while ($run['status'] === 'running' && microtime(true) < $deadline && !is_file($stopFile)) {
                     match ($run['type']) {
                         'deploy', 'sync' => DeployRun::advance($run, $context, $deadline),
@@ -43,6 +47,7 @@ final class Runner
                     };
                 }
             } catch (\Throwable $e) {
+                $context = null; // connections may be broken: start fresh next time
                 $run['status'] = 'failed';
                 $run['error'] = $e->getMessage();
                 self::log($run, 'error', $e->getMessage());
@@ -90,6 +95,32 @@ final class Runner
     private static function stopFile(string $id): string
     {
         return RunStore::dir() . "/$id.stop";
+    }
+
+    /** Indexes of the next (at most $limit) files that $filter accepts: one batch. */
+    public static function pick(array $files, callable $filter, int $limit): array
+    {
+        $picked = [];
+        foreach ($files as $i => $file) {
+            if ($filter($file)) {
+                $picked[] = $i;
+                if (count($picked) >= $limit) {
+                    break;
+                }
+            }
+        }
+        return $picked;
+    }
+
+    /** Throws when a batch had failures, naming the first few. */
+    public static function failOnErrors(array $errors, string $verb): void
+    {
+        if ($errors === []) {
+            return;
+        }
+        $first = array_slice($errors, 0, 3, true);
+        $details = implode('; ', array_map(static fn ($path, $error): string => "$path: $error", array_keys($first), $first));
+        throw new \RuntimeException(count($errors) . " file(s) could not be $verb ($details). Press Retry to try them again.");
     }
 
     public static function log(array &$run, string $level, string $message): void

@@ -113,7 +113,7 @@ final class RunController
             Http::flash('danger', 'That commit, branch or tag was not found in your repository.');
             Http::redirect('r=compare-new&site=' . urlencode($site['key']));
         }
-        $run = CompareRun::create($site, $sha, (string) ($_POST['method'] ?? 'sizes'));
+        $run = CompareRun::create($site, $sha, (string) ($_POST['method'] ?? 'fingerprint'));
         Http::redirect('r=run&id=' . urlencode($run['id']));
     }
 
@@ -160,14 +160,22 @@ final class RunController
         ], RunView::title($run));
     }
 
-    /** Called over and over by the run page while a run is running. */
+    /**
+     * Called over and over by the run page while a run is running. A background worker
+     * normally does the work and this only reports progress; without one, the page's
+     * calls do the work, a few seconds each.
+     */
     private function step(): void
     {
         Http::requirePost();
         session_write_close(); // don't block other pages while this step works
+        $id = (string) ($_GET['id'] ?? '');
+        $run = RunStore::load($id);
+        if (Worker::ensure($run)) {
+            Http::json(RunView::live($run) + ['worker' => true]);
+        }
         @set_time_limit(120);
-        $run = Runner::step((string) ($_GET['id'] ?? ''));
-        Http::json(RunView::live($run));
+        Http::json(RunView::live(Runner::step($id)) + ['worker' => false]);
     }
 
     private function approve(): void

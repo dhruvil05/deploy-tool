@@ -7,6 +7,8 @@ namespace DeployTool;
 /** A site that is a folder on this computer. Used to test deploys without touching a real server. */
 final class FolderTransport implements Transport
 {
+    use OneByOne;
+
     private readonly string $root;
 
     public function __construct(string $root)
@@ -15,6 +17,11 @@ final class FolderTransport implements Transport
         if (!is_dir($this->root)) {
             throw new \RuntimeException("Folder not found: $root");
         }
+    }
+
+    public function batchSize(): int
+    {
+        return 100;
     }
 
     public function listNames(string $dir = ''): array

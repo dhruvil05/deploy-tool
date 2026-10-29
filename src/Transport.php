@@ -21,4 +21,22 @@ interface Transport
 
     /** Deletes a file. Returns false when it wasn't there. */
     public function delete(string $path): bool;
+
+    /** How many files one batch call should handle: small for slow per-file transports, large for one-trip ones. */
+    public function batchSize(): int;
+
+    /** Several folders at once: dir => listDetailed(dir). */
+    public function listDetailedMany(array $dirs): array;
+
+    /** Several files at once: path => contents, or null when missing. Throws when a file can't be read. */
+    public function getMany(array $paths): array;
+
+    /**
+     * Writes several files (path => contents), each like put().
+     * Returns path => error message for the files that failed; every other file was written.
+     */
+    public function putMany(array $files): array;
+
+    /** Deletes several files. Returns path => error message for the ones that failed (a missing file is not a failure). */
+    public function deleteMany(array $paths): array;
 }

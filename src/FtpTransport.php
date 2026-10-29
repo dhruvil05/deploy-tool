@@ -7,9 +7,13 @@ namespace DeployTool;
 /**
  * Explicit FTPS access to a site, built on PHP's curl.
  * One curl handle is reused, so requests share the same logged-in connection.
+ * Batches run on several connections at once (the site's "connections" setting); a file
+ * that fails there is tried once more on its own, so the outcome is the same as one by one.
  */
 final class FtpTransport implements Transport
 {
+    public const MAX_CONNECTIONS = 8;
+
     // libcurl error numbers.
     private const ERR_CWD_FAILED = 9;       // folder doesn't exist
     private const ERR_RETR_FAILED = 19;     // 550 on download
@@ -30,12 +34,36 @@ final class FtpTransport implements Transport
 
     private \CurlHandle $curl;
 
+    /** Batches: the multi handle keeps its logged-in connections between batches. */
+    private ?\CurlMultiHandle $multi = null;
+
+    /** @var \CurlHandle[] */
+    private array $idle = [];
+
+    private readonly int $connections;
+
     /** Whether this server lets RNTO replace an existing file; learned on the first upload that needs it. */
     private ?bool $renameReplaces = null;
+
+    /** Whether this server knows MLSD; learned on the first listing. */
+    private ?bool $mlsd = null;
 
     public function __construct(private readonly array $site)
     {
         $this->curl = curl_init();
+        $this->connections = max(1, min(self::MAX_CONNECTIONS, (int) ($site['connections'] ?? 4)));
+    }
+
+    public function __destruct()
+    {
+        if ($this->multi !== null) {
+            curl_multi_close($this->multi);
+        }
+    }
+
+    public function batchSize(): int
+    {
+        return $this->connections * 10;
     }
 
     public function listNames(string $dir = ''): array
@@ -54,14 +82,115 @@ final class FtpTransport implements Transport
     public function listDetailed(string $dir = ''): array
     {
         $url = $this->url(self::dirPath($dir));
+        if ($this->mlsd === false) {
+            return self::parseList($this->exec($url));
+        }
         try {
-            return self::parseMlsd($this->exec($url, [CURLOPT_CUSTOMREQUEST => 'MLSD']));
+            $entries = self::parseMlsd($this->exec($url, [CURLOPT_CUSTOMREQUEST => 'MLSD']));
+            $this->mlsd = true;
+            return $entries;
         } catch (FtpException $e) {
             if (in_array($e->getCode(), self::CONNECTION_ERRORS, true)) {
                 throw $e;
             }
-            return self::parseList($this->exec($url)); // server without MLSD
+            $entries = self::parseList($this->exec($url)); // server without MLSD
+            $this->mlsd ??= false;
+            return $entries;
         }
+    }
+
+    public function listDetailedMany(array $dirs): array
+    {
+        $jobs = [];
+        foreach ($dirs as $dir) {
+            $jobs[$dir] = [CURLOPT_URL => $this->url(self::dirPath($dir))] + ($this->mlsd === false ? [] : [CURLOPT_CUSTOMREQUEST => 'MLSD']);
+        }
+        $listings = [];
+        foreach ($this->execMany($jobs) as $dir => $result) {
+            $listings[$dir] = $result instanceof FtpException
+                ? $this->listDetailed((string) $dir) // tried again on its own (also finds out about MLSD)
+                : ($this->mlsd === false ? self::parseList($result) : self::parseMlsd($result));
+        }
+        return $listings;
+    }
+
+    public function getMany(array $paths): array
+    {
+        $jobs = [];
+        foreach ($paths as $path) {
+            $jobs[$path] = [CURLOPT_URL => $this->url($path)];
+        }
+        $contents = [];
+        foreach ($this->execMany($jobs) as $path => $result) {
+            if (!$result instanceof FtpException) {
+                $contents[$path] = $result;
+            } elseif (in_array($result->getCode(), [self::ERR_CWD_FAILED, self::ERR_RETR_FAILED, self::ERR_FILE_NOT_FOUND], true)) {
+                $contents[$path] = null;
+            } else {
+                $contents[$path] = $this->get((string) $path);
+            }
+        }
+        return $contents;
+    }
+
+    public function putMany(array $files): array
+    {
+        $jobs = [];
+        $streams = [];
+        foreach ($files as $path => $contents) {
+            [$dir, $name] = self::split((string) $path);
+            $temp = '.' . $name . '.dtup';
+            $streams[$path] = fopen('php://temp', 'w+b');
+            fwrite($streams[$path], $contents);
+            rewind($streams[$path]);
+            $jobs[$path] = [
+                CURLOPT_URL => $this->url(self::join($dir, $temp)),
+                CURLOPT_UPLOAD => true,
+                CURLOPT_INFILE => $streams[$path],
+                CURLOPT_INFILESIZE => strlen($contents),
+                CURLOPT_FTP_CREATE_MISSING_DIRS => CURLFTP_CREATE_DIR_RETRY, // retries when another connection made the folder first
+                CURLOPT_POSTQUOTE => $this->renameCommands($temp, $name),
+            ];
+        }
+        try {
+            $results = $this->execMany($jobs);
+        } finally {
+            array_map('fclose', $streams);
+        }
+
+        // A failed upload is done again on its own: put() also handles servers that
+        // won't rename over an existing file, and removes a half-written temp file.
+        $errors = [];
+        foreach ($results as $path => $result) {
+            if ($result instanceof FtpException) {
+                try {
+                    $this->put((string) $path, $files[$path]);
+                } catch (FtpException $e) {
+                    $errors[$path] = $e->getMessage();
+                }
+            }
+        }
+        return $errors;
+    }
+
+    public function deleteMany(array $paths): array
+    {
+        $jobs = [];
+        foreach ($paths as $path) {
+            [$dir, $name] = self::split($path);
+            $jobs[$path] = [CURLOPT_URL => $this->url(self::dirPath($dir)), CURLOPT_DIRLISTONLY => true, CURLOPT_POSTQUOTE => ["DELE $name"]];
+        }
+        $errors = [];
+        foreach ($this->execMany($jobs) as $path => $result) {
+            if ($result instanceof FtpException) {
+                try {
+                    $this->delete((string) $path); // also tells "already gone" from a real failure
+                } catch (FtpException $e) {
+                    $errors[$path] = $e->getMessage();
+                }
+            }
+        }
+        return $errors;
     }
 
     public function get(string $path): ?string
@@ -191,10 +320,81 @@ final class FtpTransport implements Transport
 
     private function exec(string $url, array $options = []): string
     {
-        $verify = !empty($this->site['verify_tls']);
         curl_reset($this->curl); // clears options, keeps the open connection
-        curl_setopt_array($this->curl, $options + [
-            CURLOPT_URL => $url,
+        curl_setopt_array($this->curl, $options + [CURLOPT_URL => $url] + $this->baseOptions());
+
+        $result = curl_exec($this->curl);
+        if ($result === false) {
+            throw self::error($this->curl, curl_errno($this->curl));
+        }
+        return (string) $result;
+    }
+
+    /**
+     * Runs one request per job (key => curl options), up to "connections" at a time.
+     * Returns key => response body, or the FtpException for that job. Never throws for one job.
+     *
+     * @return array<string, string|FtpException>
+     */
+    private function execMany(array $jobs): array
+    {
+        if ($jobs === []) {
+            return [];
+        }
+        if (count($jobs) === 1 || $this->connections === 1) {
+            $results = [];
+            foreach ($jobs as $key => $options) {
+                try {
+                    $results[$key] = $this->exec($options[CURLOPT_URL], $options);
+                } catch (FtpException $e) {
+                    $results[$key] = $e;
+                }
+            }
+            return $results;
+        }
+
+        if ($this->multi === null) {
+            $this->multi = curl_multi_init();
+            curl_multi_setopt($this->multi, CURLMOPT_MAX_HOST_CONNECTIONS, $this->connections);
+            curl_multi_setopt($this->multi, CURLMOPT_MAXCONNECTS, $this->connections);
+        }
+        $queue = $jobs;
+        $running = []; // handle id => [key, handle]
+        $results = [];
+        do {
+            while ($queue !== [] && count($running) < $this->connections) {
+                $key = array_key_first($queue);
+                $handle = array_pop($this->idle) ?? curl_init();
+                curl_reset($handle);
+                curl_setopt_array($handle, $queue[$key] + $this->baseOptions());
+                unset($queue[$key]);
+                curl_multi_add_handle($this->multi, $handle);
+                $running[spl_object_id($handle)] = [$key, $handle];
+            }
+            curl_multi_exec($this->multi, $stillRunning);
+            if (curl_multi_select($this->multi, 1.0) === -1) {
+                usleep(2000);
+            }
+            while (($info = curl_multi_info_read($this->multi)) !== false) {
+                $handle = $info['handle'];
+                [$key] = $running[spl_object_id($handle)];
+                $results[$key] = $info['result'] === CURLE_OK
+                    ? (string) curl_multi_getcontent($handle)
+                    : self::error($handle, $info['result']);
+                curl_multi_remove_handle($this->multi, $handle);
+                unset($running[spl_object_id($handle)]);
+                $this->idle[] = $handle;
+            }
+        } while ($running !== [] || $queue !== []);
+
+        // Same order as the jobs.
+        return array_replace(array_intersect_key($jobs, $results), $results);
+    }
+
+    private function baseOptions(): array
+    {
+        $verify = !empty($this->site['verify_tls']);
+        return [
             CURLOPT_USERNAME => (string) $this->site['username'],
             CURLOPT_PASSWORD => (string) $this->site['password'],
             CURLOPT_USE_SSL => CURLUSESSL_ALL,
@@ -205,14 +405,12 @@ final class FtpTransport implements Transport
             CURLOPT_CONNECTTIMEOUT => 20,
             CURLOPT_TIMEOUT => 300,
             CURLOPT_RETURNTRANSFER => true,
-        ]);
+        ];
+    }
 
-        $result = curl_exec($this->curl);
-        if ($result === false) {
-            $code = curl_errno($this->curl);
-            throw new FtpException(self::MESSAGES[$code] ?? 'FTP error: ' . curl_error($this->curl), $code);
-        }
-        return (string) $result;
+    private static function error(\CurlHandle $handle, int $code): FtpException
+    {
+        return new FtpException(self::MESSAGES[$code] ?? 'FTP error: ' . (curl_error($handle) ?: curl_strerror($code)), $code);
     }
 
     private function url(string $path): string

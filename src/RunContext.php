@@ -42,4 +42,16 @@ final class RunContext
         return $this->git()->fileAt($commit, $path)
             ?? throw new \RuntimeException("$path is not in commit " . short_sha($commit) . '.');
     }
+
+    /** Several files exactly as committed (path => contents), with one git call. */
+    public function blobs(string $commit, array $paths): array
+    {
+        $files = $this->git()->filesAt($commit, $paths);
+        foreach ($files as $path => $contents) {
+            if ($contents === null) {
+                throw new \RuntimeException("$path is not in commit " . short_sha($commit) . '.');
+            }
+        }
+        return $files;
+    }
 }
