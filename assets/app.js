@@ -72,8 +72,15 @@
         const count = live.querySelector('.js-count');
         const progress = live.querySelector('.js-progress');
         const log = live.querySelector('.js-log');
+        const steps = [...document.querySelectorAll('.steps li[data-phase]')];
         const render = (data) => {
             phase.textContent = data.phase_label;
+            const at = steps.findIndex((li) => li.dataset.phase === data.phase);
+            if (at >= 0) {
+                steps.forEach((li, index) => {
+                    li.className = index < at ? 'step-done' : (index === at ? 'step-current' : 'step-pending');
+                });
+            }
             count.textContent = data.total > 0 ? `${data.done} of ${data.total}` : '';
             progress.max = Math.max(data.total, 1);
             progress.value = data.total > 0 ? data.done : 0;
@@ -150,13 +157,16 @@
         });
     });
 
-    // Site form: show the fields for FTP or folder sites.
-    const siteType = document.querySelector('.js-site-type');
-    if (siteType) {
-        const sync = () => document.querySelectorAll('.js-type-group').forEach((group) => {
-            group.hidden = group.dataset.type !== siteType.value;
-        });
-        siteType.addEventListener('change', sync);
+    // Site form: show the fields for the chosen kind of site (FTP, SSH or folder).
+    const siteTypes = [...document.querySelectorAll('.js-site-type')];
+    if (siteTypes.length) {
+        const sync = () => {
+            const type = (siteTypes.find((radio) => radio.checked) || siteTypes[0]).value;
+            document.querySelectorAll('.js-type-group').forEach((group) => {
+                group.hidden = group.dataset.type !== type;
+            });
+        };
+        siteTypes.forEach((radio) => radio.addEventListener('change', sync));
         sync();
     }
 
@@ -173,7 +183,8 @@
         const tabs = [...panel.querySelectorAll('.js-tab')];
         const panes = Object.fromEntries([...panel.querySelectorAll('.js-panel')].map((pane) => [pane.dataset.tab, pane]));
         const search = panel.querySelector('.js-picker-search');
-        const unsaved = panel.querySelector('.js-unsaved');
+        const unsaved = document.querySelector('.js-unsaved');
+        const summary = panel.querySelector('.js-rule-summary');
         const saved = textarea.value;
         const bigFolder = 500; // ask before protecting this many files at once
         const expanded = new Set();
@@ -273,45 +284,69 @@
             return item;
         };
 
+        // This local's rules in three groups: ones that need a fix (a folder missing its "/"),
+        // ones that protect files, and ones not in git (fine for server-only files).
         const renderRules = () => {
             const counts = new Map((data ? data.rules : []).map(([rule, inGit, onServer, fix]) => [rule, { inGit, onServer, fix }]));
             const rules = typedRules();
             ruleCount.textContent = rules.length;
+            summary.textContent = '';
             if (!rules.length) {
-                ruleList.replaceChildren(el('li', 'meta', 'Nothing yet. Tick paths below to add them.'));
+                ruleList.replaceChildren(el('li', 'meta', 'Nothing yet. Tick paths under "Add paths" to protect them.'));
                 return;
             }
-            ruleList.replaceChildren(...rules.map((rule) => {
-                const info = counts.get(rule);
+            const row = (rule, note, noteTitle = '') => {
                 const item = el('li', 'rule-row');
                 const path = el('code', 'rule-path', shorten(rule));
                 path.title = rule;
-                item.append(path);
-                if (!info) {
-                    item.append(el('span', 'pill', '…'));
-                } else if (info.inGit + info.onServer > 0) {
-                    const pill = el('span', 'pill', files(info.inGit + info.onServer));
-                    pill.title = `${files(info.inGit)} in git, ${files(info.onServer)} only on servers`;
-                    item.append(pill);
-                } else {
-                    item.classList.add('rule-bad');
-                    item.append(el('span', 'pill pill-warning', 'matches nothing'));
-                    if (info.fix) {
-                        const fix = el('button', 'small', `Use ${info.fix}`);
-                        fix.type = 'button';
-                        fix.title = 'A folder needs a / at the end';
-                        fix.addEventListener('click', () => setRules(typedRules().map((line) => (line === rule ? info.fix : line))));
-                        item.append(fix);
-                    }
-                }
+                const count = el('span', 'rule-count', note);
+                count.title = noteTitle;
                 const remove = el('button', 'rule-remove', '×');
                 remove.type = 'button';
                 remove.setAttribute('aria-label', 'Remove ' + rule);
                 remove.title = 'Remove';
                 remove.addEventListener('click', () => setRules(typedRules().filter((line) => line !== rule)));
-                item.append(remove);
+                item.append(path, count, remove);
                 return item;
-            }));
+            };
+            const head = (text, help, className = '') => {
+                const item = el('li', 'rule-group ' + className, text);
+                if (help) {
+                    item.append(el('span', 'rule-group-help', help));
+                }
+                return item;
+            };
+            const fixes = [];
+            const active = [];
+            const unused = [];
+            let total = 0;
+            for (const rule of rules) {
+                const info = counts.get(rule);
+                if (!info) {
+                    active.push(row(rule, '…'));
+                } else if (info.inGit + info.onServer > 0) {
+                    total += info.inGit + info.onServer;
+                    active.push(row(rule, files(info.inGit + info.onServer), `${files(info.inGit)} in git, ${files(info.onServer)} only on servers`));
+                } else if (info.fix) {
+                    const item = row(rule, '');
+                    item.classList.add('rule-bad');
+                    const fix = el('button', 'small', `Change to ${info.fix}`);
+                    fix.type = 'button';
+                    fix.addEventListener('click', () => setRules(typedRules().map((line) => (line === rule ? info.fix : line))));
+                    item.insertBefore(fix, item.lastChild);
+                    fixes.push(item);
+                } else {
+                    unused.push(row(rule, 'not in git'));
+                }
+            }
+            if (data) {
+                summary.textContent = `· ${files(total)} covered`;
+            }
+            ruleList.replaceChildren(
+                ...(fixes.length ? [head('Needs a fix', 'These look like folders but have no "/" at the end, so they protect nothing.', 'is-warning'), ...fixes] : []),
+                ...active,
+                ...(unused.length ? [head('Not in git', 'Fine for files that exist only on the server, like .user.ini. Otherwise check the spelling.'), ...unused] : []),
+            );
         };
 
         const renderServer = () => {
@@ -461,6 +496,39 @@
         load(true);
     }
 
+    // Compare result: files shown as a folder tree. A folder's box ticks every file in it and
+    // shows a part-ticked state; whole lists can be ticked too. Keeps "N of M ticked" up to date.
+    const syncForm = document.getElementById('sync-form');
+    if (syncForm) {
+        const boxes = [...document.querySelectorAll('input[form="sync-form"][name="files[]"]')];
+        const folders = [...document.querySelectorAll('.js-tree-dir')].map((box) => ({
+            box,
+            files: [...box.closest('details').querySelectorAll('input[name="files[]"]')],
+        }));
+        const count = syncForm.querySelector('.js-pick-count');
+        const update = () => {
+            count.textContent = boxes.filter((box) => box.checked).length;
+            for (const { box, files } of folders) {
+                const ticked = files.filter((file) => file.checked).length;
+                box.checked = ticked === files.length;
+                box.indeterminate = ticked > 0 && ticked < files.length;
+            }
+        };
+        boxes.forEach((box) => box.addEventListener('change', update));
+        folders.forEach(({ box, files }) => box.addEventListener('change', () => {
+            files.forEach((file) => { file.checked = box.checked; });
+            update();
+        }));
+        document.querySelectorAll('.js-check-all').forEach((button) => {
+            button.addEventListener('click', () => {
+                boxes.filter((box) => box.dataset.list === button.dataset.list)
+                    .forEach((box) => { box.checked = button.dataset.checked === '1'; });
+                update();
+            });
+        });
+        update();
+    }
+
     // "Restore the default list" and similar: put a stored value into a field (saved with the form).
     document.querySelectorAll('.js-fill').forEach((button) => {
         button.addEventListener('click', () => {
@@ -475,5 +543,34 @@
             button.disabled = true;
             button.textContent = button.dataset.busy || 'Working…';
         });
+    });
+
+    // Compare result: a number tile opens its list before jumping to it.
+    document.querySelectorAll('.js-open-section').forEach((link) => {
+        link.addEventListener('click', () => {
+            const target = document.querySelector(link.getAttribute('href'));
+            if (target && target.tagName === 'DETAILS') {
+                target.open = true;
+            }
+        });
+    });
+
+    // Compare start: quick picks and the recent-commit list fill the commit field.
+    document.querySelectorAll('.js-fill-input').forEach((button) => {
+        button.addEventListener('click', () => {
+            document.getElementById(button.dataset.target).value = button.dataset.value;
+        });
+    });
+    document.querySelectorAll('.js-pick-commit').forEach((select) => {
+        select.addEventListener('change', () => {
+            if (select.value !== '') {
+                document.getElementById(select.dataset.target).value = select.value;
+            }
+        });
+    });
+
+    // History filters: apply as soon as a dropdown changes (search applies on Enter).
+    document.querySelectorAll('.js-autosubmit select').forEach((select) => {
+        select.addEventListener('change', () => select.form.submit());
     });
 })();

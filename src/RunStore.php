@@ -48,6 +48,46 @@ final class RunStore
         JsonStore::writeFile(self::dir() . "/{$run['id']}.json", $run);
     }
 
+    /**
+     * Runs started after $id that change $siteKey, newest first. Run ids hold their type and
+     * site, so only those files are read.
+     */
+    public static function changingAfter(string $id, string $siteKey): array
+    {
+        $files = glob(self::dir() . '/*.json') ?: [];
+        rsort($files);
+        $runs = [];
+        foreach ($files as $file) {
+            $other = basename($file, '.json');
+            if ($other <= $id) {
+                break;
+            }
+            if (preg_match('/^\d{8}-\d{6}-([a-z]+)-(.+)-[0-9a-f]{4}$/', $other, $m)
+                && ($m[2] !== $siteKey || !in_array($m[1], self::CHANGING_TYPES, true))) {
+                continue;
+            }
+            $runs[] = JsonStore::readFile($file);
+        }
+        return $runs;
+    }
+
+    /** The newest run of one of $types on a site with one of $statuses; reads only that site's run files. */
+    public static function latestFor(string $siteKey, array $types, array $statuses): ?array
+    {
+        $files = [];
+        foreach ($types as $type) {
+            array_push($files, ...(glob(self::dir() . "/*-$type-$siteKey-*.json") ?: []));
+        }
+        rsort($files);
+        foreach ($files as $file) {
+            $run = JsonStore::readFile($file);
+            if (($run['site'] ?? null) === $siteKey && in_array($run['status'] ?? '', $statuses, true)) {
+                return $run;
+            }
+        }
+        return null;
+    }
+
     /** All runs, newest first. */
     public static function all(): array
     {
@@ -80,9 +120,9 @@ final class RunStore
     }
 
     /** Runs that are still open (shown on the dashboard). */
-    public static function open(): array
+    public static function open(?array $runs = null): array
     {
-        return array_values(array_filter(self::all(), static fn (array $run): bool => self::holdsSite($run)
+        return array_values(array_filter($runs ?? self::all(), static fn (array $run): bool => self::holdsSite($run)
             || ($run['type'] === 'compare' && $run['status'] === 'running')));
     }
 }

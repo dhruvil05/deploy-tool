@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace DeployTool;
 
 /**
- * Tool settings: who is deploying, which git, PHP and ssh programs to use, and the paths
- * protected on every site. Repositories are locals (Sources).
+ * Tool settings: who is deploying, which git, PHP and ssh programs to use, how runs behave,
+ * and the paths protected on every site. Repositories are locals (Sources).
  */
 final class Settings
 {
     private const LARAGON_GIT = 'C:\\laragon\\bin\\git\\bin\\git.exe';
     private const WINDOWS_SSH = 'C:\\Windows\\System32\\OpenSSH\\ssh.exe';
+
+    /** Choices for the default compare method: method => label. */
+    public const COMPARE_METHODS = ['fingerprint' => 'Fingerprint file', 'sizes' => 'File sizes over FTP'];
 
     public static function defaults(): array
     {
@@ -20,6 +23,10 @@ final class Settings
             'git_path' => '',
             'php_path' => '',
             'ssh_path' => '',
+            'review_minutes' => '60',
+            'compare_method' => 'fingerprint',
+            'background_runs' => '1',
+            'ftp_connections' => '4',
             'protected_paths' => implode("\n", ProtectedPaths::DEFAULTS),
         ];
     }
@@ -48,6 +55,7 @@ final class Settings
             $values[$key] = trim((string) ($input[$key] ?? ''));
         }
         $values['protected_paths'] = implode("\n", array_unique(ProtectedPaths::parse($values['protected_paths'])));
+        $values['background_runs'] = $values['background_runs'] === '1' ? '1' : '0';
 
         $errors = [];
         if (str_contains($values['protected_paths'], '..')) {
@@ -61,11 +69,31 @@ final class Settings
                 $errors[$key] = 'File not found.';
             }
         }
+        if (!ctype_digit($values['review_minutes']) || (int) $values['review_minutes'] < 5 || (int) $values['review_minutes'] > 720) {
+            $errors['review_minutes'] = 'Enter 5 to 720 minutes.';
+        }
+        if (!isset(self::COMPARE_METHODS[$values['compare_method']])) {
+            $errors['compare_method'] = 'Pick a method.';
+        }
+        if (!ctype_digit($values['ftp_connections']) || (int) $values['ftp_connections'] < 1 || (int) $values['ftp_connections'] > FtpTransport::MAX_CONNECTIONS) {
+            $errors['ftp_connections'] = 'Enter 1 to ' . FtpTransport::MAX_CONNECTIONS . '.';
+        }
 
         if (!$errors) {
             JsonStore::write('settings', $values + self::legacy());
         }
         return $errors;
+    }
+
+    /** How long a prepared deploy can wait for approval before its backups count as out of date. */
+    public static function reviewMinutes(): int
+    {
+        return max(5, (int) self::get('review_minutes'));
+    }
+
+    public static function backgroundRuns(): bool
+    {
+        return self::get('background_runs') === '1';
     }
 
     /** The configured git, else Laragon's git, else git from PATH. */

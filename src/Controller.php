@@ -32,22 +32,39 @@ final class Controller
 
     private function dashboard(): void
     {
-        $locals = [];
-        foreach (Sources::all() as $key => $source) {
-            try {
-                $locals[$key] = LocalStatus::collect($source);
-            } catch (\RuntimeException $e) {
-                $locals[$key] = ['source' => $source, 'error' => $e->getMessage()];
-            }
+        // One local at a time: the one picked in the switcher, remembered in a cookie.
+        $sources = Sources::all();
+        $key = (string) ($_GET['local'] ?? $_COOKIE['dt_local'] ?? '');
+        if (!isset($sources[$key])) {
+            $key = (string) array_key_first($sources);
+        } elseif (isset($_GET['local'])) {
+            setcookie('dt_local', $key, ['expires' => time() + 365 * 86400, 'httponly' => true, 'samesite' => 'Lax']);
         }
-        $openRuns = RunStore::open();
+        try {
+            $local = LocalStatus::collect($sources[$key]);
+        } catch (\RuntimeException $e) {
+            $local = ['source' => $sources[$key], 'error' => $e->getMessage()];
+        }
+
+        $runs = RunStore::all();
+        $openRuns = RunStore::open($runs);
         foreach ($openRuns as $run) {
             Worker::ensure($run); // picks up runs whose worker ended, for example after a restart
         }
+        $layout = Sites::pipelines();
+        $pipeline = current(array_filter($layout['pipelines'], static fn (array $p): bool => $p['source']['key'] === $key));
+        $siteCounts = [];
+        foreach ($layout['pipelines'] as $p) {
+            $siteCounts[$p['source']['key']] = array_sum(array_map(static fn (array $row): int => count($row['sites']), $p['rows']));
+        }
         View::render('dashboard', [
             'page' => 'dashboard',
-            'locals' => $locals,
-            'layout' => Sites::pipelines(),
+            'sources' => $sources,
+            'siteCounts' => $siteCounts,
+            'local' => $local,
+            'pipeline' => $pipeline,
+            'layout' => $layout,
+            'stats' => Activity::forSource($runs, $key),
             'nameMissing' => Settings::get('deployer_name') === '',
             'openRuns' => $openRuns,
         ], 'Dashboard');
@@ -73,7 +90,7 @@ final class Controller
     {
         View::render('sites', [
             'page' => 'sites',
-            'sites' => Sites::ordered(),
+            'tree' => Sites::bySource(),
             'saved' => Sites::isSaved(),
             'sources' => Sources::all(),
         ], 'Sites');
@@ -272,6 +289,19 @@ final class Controller
             'gitBinary' => Settings::gitBinary($values['git_path'] ?? ''),
             'phpBinary' => Settings::phpBinary($values['php_path'] ?? ''),
             'sshBinary' => Settings::sshBinary($values['ssh_path'] ?? ''),
+            'storage' => $this->storageSummary(),
         ], 'Settings');
+    }
+
+    /** Where the tool keeps its data, and how much of it there is, for the Settings page. */
+    private function storageSummary(): array
+    {
+        $backups = glob(STORAGE_DIR . '/backups/*.zip') ?: [];
+        return [
+            'dir' => str_replace('/', '\\', (string) (realpath(STORAGE_DIR) ?: STORAGE_DIR)),
+            'runs' => count(glob(RunStore::dir() . '/*.json') ?: []),
+            'backups' => count($backups),
+            'backupBytes' => array_sum(array_map('filesize', $backups)),
+        ];
     }
 }

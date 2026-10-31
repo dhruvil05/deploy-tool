@@ -82,7 +82,7 @@ final class Sites
 
     public static function blank(): array
     {
-        return ['source' => 'local:' . Sources::firstKey()] + self::BLANK;
+        return ['source' => 'local:' . Sources::firstKey(), 'connections' => (int) Settings::get('ftp_connections')] + self::BLANK;
     }
 
     public static function transport(array $site): Transport
@@ -283,6 +283,43 @@ final class Sites
             'unconnected' => array_values(array_filter($sites, static fn (array $site): bool => !isset($placed[$site['key']]) && !$site['hidden'])),
             'hidden' => array_values(array_filter($sites, static fn (array $site): bool => $site['hidden'])),
         ];
+    }
+
+    /**
+     * Sites per local for the Sites page, in pipeline order, hidden ones included. Each entry
+     * is ['site', 'from' (what it gets code from), 'step', 'level']: a site's first follower
+     * continues its line, any other follower starts a branch one level in. Sites that don't
+     * lead back to a local go under 'unconnected'.
+     *
+     * @return array{locals: array<string, list<array>>, unconnected: list<array>}
+     */
+    public static function bySource(): array
+    {
+        $sites = self::all();
+        $children = [];
+        foreach ($sites as $key => $site) {
+            $children[$site['source']][] = $key;
+        }
+        $placed = [];
+        $locals = [];
+        foreach (Sources::all() as $sourceKey => $source) {
+            $entries = [];
+            $add = static function (string $key, string $from, int $step, int $level) use (&$add, &$entries, &$placed, $children, $sites): void {
+                if (isset($placed[$key])) {
+                    return;
+                }
+                $placed[$key] = true;
+                $entries[] = ['site' => $sites[$key], 'from' => $from, 'step' => $step, 'level' => $level];
+                foreach ($children['site:' . $key] ?? [] as $index => $child) {
+                    $add($child, $sites[$key]['name'], $step + 1, $level + ($index > 0 ? 1 : 0));
+                }
+            };
+            foreach ($children['local:' . $sourceKey] ?? [] as $head) {
+                $add($head, 'Local ' . Sources::label($source), 1, 0);
+            }
+            $locals[$sourceKey] = $entries;
+        }
+        return ['locals' => $locals, 'unconnected' => array_values(array_diff_key($sites, $placed))];
     }
 
     /** Sites in pipeline order (for lists): every site comes after the site it gets code from. */

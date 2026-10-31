@@ -3,6 +3,7 @@
  * One site on the dashboard, with "Gets code from" and Hide.
  *
  * @var array $site
+ * @var array|null $lastDeploy its latest deploy that reached the server (Activity)
  */
 
 use DeployTool\Http;
@@ -10,6 +11,7 @@ use DeployTool\Sites;
 
 $csrf = '<input type="hidden" name="_csrf" value="' . e(Http::csrfToken()) . '"><input type="hidden" name="key" value="' . e($site['key']) . '">';
 $checkout = Sites::checkoutStatus($site);
+$lastDeploy ??= null;
 ?>
 <section class="card site-card" data-site="<?= e($site['key']) ?>" data-source="<?= e($site['source']) ?>">
     <div class="card-label">
@@ -45,6 +47,16 @@ $checkout = Sites::checkoutStatus($site);
     </p>
 
     <div class="site-status"><p class="meta">Checking…</p></div>
+
+    <p class="meta last-deploy">
+        <?php if ($lastDeploy === null): ?>
+            No deploy from this tool yet.
+        <?php else: ?>
+            Last deploy <a href="index.php?r=run&amp;id=<?= e(urlencode($lastDeploy['id'])) ?>"><?= e(ago($lastDeploy['finished_at'] ?? $lastDeploy['created_at'])) ?></a>
+            · <code><?= e(short_sha($lastDeploy['to'])) ?></code> · <?= count($lastDeploy['files']) ?> file<?= count($lastDeploy['files']) === 1 ? '' : 's' ?> · <?= e($lastDeploy['by']) ?>
+            <?php if ($lastDeploy['status'] === 'rolled_back'): ?><span class="badge badge-neutral">Rolled back</span><?php endif ?>
+        <?php endif ?>
+    </p>
 
     <form method="post" action="index.php?r=site-source" class="source-form js-source"
           data-production="<?= $site['production'] ? '1' : '0' ?>" data-name="<?= e($site['name']) ?>">

@@ -36,10 +36,7 @@ final class RollbackRun
         if (in_array($run['status'], ['running', 'review'], true)) {
             return 'Stop this run first.';
         }
-        foreach (RunStore::all() as $other) { // newest first
-            if ($other['id'] <= $run['id']) {
-                break;
-            }
+        foreach (RunStore::changingAfter($run['id'], $run['site']) as $other) {
             if ($other['site'] === $run['site'] && in_array($other['type'], RunStore::CHANGING_TYPES, true) && !empty($other['touched'])) {
                 return 'A later run changed this site. Roll that one back first.';
             }

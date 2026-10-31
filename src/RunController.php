@@ -62,9 +62,13 @@ final class RunController
             if ($data['state'] === null) {
                 $data['commits'] = $git->recentCommits($data['source']['sha'], 30);
             } elseif ($git->resolve($data['state']['commit']) !== null) {
+                $range = $data['state']['commit'] . '..' . $data['source']['sha'];
+                $commits = $git->recentCommits($range, 50);
                 $data['changes'] = [
-                    'commits' => $git->countBetween($data['state']['commit'], $data['source']['sha']),
-                    'files' => count($git->changedFiles($data['state']['commit'], $data['source']['sha'])),
+                    'commits' => count($commits) < 50 ? count($commits) : $git->countBetween($data['state']['commit'], $data['source']['sha']),
+                    'list' => $commits,
+                    'files' => $git->changedFiles($data['state']['commit'], $data['source']['sha']),
+                    'protected' => ProtectedPaths::regexes(Sites::rootSource($site)),
                 ];
             }
         }
@@ -101,6 +105,9 @@ final class RunController
             'site' => $site,
             'default' => $default,
             'sourceError' => $sourceError,
+            'recent' => $default !== null ? $git->recentCommits($default['sha'], 15) : [],
+            'lastCompare' => RunStore::latestFor($site['key'], ['compare'], ['done']),
+            'lastDeploy' => RunStore::latestFor($site['key'], ['deploy', 'sync'], ['done']),
         ], 'Compare ' . $site['name']);
     }
 
@@ -113,7 +120,7 @@ final class RunController
             Http::flash('danger', 'That commit, branch or tag was not found in your repository.');
             Http::redirect('r=compare-new&site=' . urlencode($site['key']));
         }
-        $run = CompareRun::create($site, $sha, (string) ($_POST['method'] ?? 'fingerprint'));
+        $run = CompareRun::create($site, $sha, (string) ($_POST['method'] ?? Settings::get('compare_method')));
         Http::redirect('r=run&id=' . urlencode($run['id']));
     }
 
@@ -135,7 +142,8 @@ final class RunController
         Http::requirePost();
         $compare = $this->run((string) ($_POST['id'] ?? ''));
         try {
-            $run = CompareRun::createSync($compare, !empty($_POST['include_eol']));
+            $selected = !empty($_POST['pick']) ? array_values(array_filter((array) ($_POST['files'] ?? []), 'is_string')) : null;
+            $run = CompareRun::createSync($compare, $selected, !empty($_POST['include_eol']));
         } catch (\RuntimeException $e) {
             Http::flash('danger', $e->getMessage());
             Http::redirect('r=run&id=' . urlencode($compare['id']));
@@ -147,10 +155,8 @@ final class RunController
     {
         Backup::packOldFolders();
         $run = $this->run((string) ($_GET['id'] ?? ''));
-        $git = Sources::git(RunStore::source($run));
-        $info = static function (?string $sha) use ($git): ?array {
-            return $sha !== null && $git->resolve($sha) !== null ? $git->commitInfo($sha) : ($sha !== null ? ['sha' => $sha, 'subject' => ''] : null);
-        };
+        $infos = Sources::git(RunStore::source($run))->commitInfos([$run['from'], $run['to']]);
+        $info = static fn (?string $sha): ?array => $sha === null ? null : ($infos[$sha] ?? ['sha' => $sha, 'subject' => '']);
         View::render('run', [
             'page' => 'history',
             'run' => $run,
@@ -299,23 +305,36 @@ final class RunController
             $labels = ['on the server before', 'after this run'];
         }
 
+        $options = [
+            'view' => ($_GET['view'] ?? '') === 'split' ? 'split' : 'unified',
+            'ctx' => in_array($_GET['ctx'] ?? '', ['10', 'all'], true) ? (string) $_GET['ctx'] : '3',
+        ];
         $fileA = tempnam(sys_get_temp_dir(), 'dtdiffa');
         $fileB = tempnam(sys_get_temp_dir(), 'dtdiffb');
         file_put_contents($fileA, $before ?? '');
         file_put_contents($fileB, $after ?? '');
-        $text = $git->diffFiles($fileA, $fileB);
+        $text = $git->diffFiles($fileA, $fileB, $options['ctx'] === 'all' ? 1000000 : (int) $options['ctx']);
         @unlink($fileA);
         @unlink($fileB);
-        $text = str_replace([str_replace('\\', '/', $fileA), str_replace('\\', '/', $fileB), $fileA, $fileB], ["({$labels[0]})", "({$labels[1]})", "({$labels[0]})", "({$labels[1]})"], $text);
 
+        $paths = array_column($run['files'], 'path');
+        $index = (int) array_search($path, $paths, true);
         View::render('diff', [
             'page' => 'history',
             'run' => $run,
+            'file' => $file,
             'path' => $path,
+            'kind' => $kind,
             'labels' => $labels,
             'beforeMissing' => $before === null,
             'afterMissing' => $after === null,
-            'text' => $text,
+            'eolOnly' => $before !== null && $after !== null && $before !== $after
+                && str_replace("\r\n", "\n", $before) === str_replace("\r\n", "\n", $after),
+            'diff' => DiffView::parse($text),
+            'options' => $options,
+            'position' => [$index + 1, count($paths)],
+            'prevPath' => $paths[$index - 1] ?? null,
+            'nextPath' => $paths[$index + 1] ?? null,
         ], 'Changes in ' . basename($path));
     }
 
@@ -355,7 +374,78 @@ final class RunController
     private function history(): void
     {
         Backup::packOldFolders(); // backups saved before zips existed
-        View::render('history', ['page' => 'history', 'runs' => RunStore::all()], 'History');
+        $all = RunStore::all();
+        $filters = [
+            'type' => (string) ($_GET['type'] ?? ''),
+            'local' => (string) ($_GET['local'] ?? ''),
+            'site' => (string) ($_GET['site'] ?? ''),
+            'status' => (string) ($_GET['status'] ?? ''),
+            'q' => trim((string) ($_GET['q'] ?? '')),
+        ];
+        $q = strtolower($filters['q']);
+        $runs = array_values(array_filter($all, static fn (array $run): bool =>
+            ($filters['local'] === '' || ($run['repo_source'] ?? '') === $filters['local'])
+            && ($filters['site'] === '' || $run['site'] === $filters['site'])
+            && ($filters['status'] === '' || $run['status'] === $filters['status'])
+            && ($q === '' || str_contains(strtolower(implode(' ', [$run['site_name'], $run['by'], (string) $run['from'], (string) $run['to'], $run['id']])), $q))));
+
+        // Counts per type for the type chips, before the type filter itself.
+        $kind = static fn (array $run): string => $run['type'] === 'sync' ? 'deploy' : $run['type'];
+        $counts = ['' => count($runs), 'deploy' => 0, 'compare' => 0, 'rollback' => 0];
+        foreach ($runs as $run) {
+            $counts[$kind($run)] = ($counts[$kind($run)] ?? 0) + 1;
+        }
+        if (isset($counts[$filters['type']]) && $filters['type'] !== '') {
+            $runs = array_values(array_filter($runs, static fn (array $run): bool => $kind($run) === $filters['type']));
+        }
+
+        if (($_GET['format'] ?? '') === 'csv') {
+            $this->historyCsv($runs);
+        }
+
+        $perPage = 50;
+        $pages = max(1, (int) ceil(count($runs) / $perPage));
+        $page = min($pages, max(1, (int) ($_GET['page'] ?? 1)));
+        $sites = [];
+        foreach ($all as $run) {
+            $sites[$run['site']] ??= $run['site_name'];
+        }
+        View::render('history', [
+            'page' => 'history',
+            'runs' => array_slice($runs, ($page - 1) * $perPage, $perPage),
+            'total' => count($runs),
+            'counts' => $counts,
+            'filters' => $filters,
+            'pageNumber' => $page,
+            'pages' => $pages,
+            'sources' => Sources::all(),
+            'sites' => $sites,
+        ], 'History');
+    }
+
+    /** The filtered history as a spreadsheet. */
+    private function historyCsv(array $runs): never
+    {
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="deploy-history-' . date('Ymd') . '.csv"');
+        $out = fopen('php://output', 'w');
+        fputcsv($out, ['started', 'finished', 'type', 'site', 'local', 'from', 'to', 'files', 'status', 'by', 'run']);
+        foreach ($runs as $run) {
+            fputcsv($out, [
+                date('Y-m-d H:i:s', $run['created_at']),
+                isset($run['finished_at']) ? date('Y-m-d H:i:s', $run['finished_at']) : '',
+                RunView::TYPES[$run['type']] ?? $run['type'],
+                $run['site_name'],
+                $run['repo_source'] ?? '',
+                (string) $run['from'],
+                (string) $run['to'],
+                $run['type'] === 'compare' ? '' : count($run['files']),
+                RunView::STATUSES[$run['status']][0] ?? $run['status'],
+                $run['by'],
+                $run['id'],
+            ]);
+        }
+        exit;
     }
 
     private function backupDownload(): void

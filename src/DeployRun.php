@@ -15,8 +15,6 @@ namespace DeployTool;
  */
 final class DeployRun
 {
-    public const REVIEW_MINUTES = 60;
-
     public const PHASES = [
         'checks' => 'Safety checks',
         'lint' => 'PHP syntax check',
@@ -108,8 +106,8 @@ final class DeployRun
         if ($run['status'] !== 'review') {
             return 'This run is not waiting for your review.';
         }
-        if (time() - (int) $run['reviewed_at'] > self::REVIEW_MINUTES * 60) {
-            return 'This review is more than ' . self::REVIEW_MINUTES . ' minutes old, so the backups may be out of date. Cancel it and prepare the deploy again.';
+        if (time() - (int) $run['reviewed_at'] > Settings::reviewMinutes() * 60) {
+            return 'This review is more than ' . Settings::reviewMinutes() . ' minutes old, so the backups may be out of date. Cancel it and prepare the deploy again.';
         }
         $warnings = count(self::warnings($run));
         if ($warnings > 0 && empty($input['ack_warnings'])) {

@@ -93,4 +93,49 @@ final class RunView
         }
         return DeployRun::SERVER_STATES[$file['server']] ?? ['', 'neutral'];
     }
+
+    /**
+     * Paths as a folder tree, like an editor's file explorer: folders first, then files,
+     * each sorted by name. A folder holding only one folder is merged with it
+     * ("modules/recruitment/libraries"), so the tree stays short.
+     *
+     * @return array{dirs: array<string, array>, files: array<string, string>, count: int}
+     *         files are name => full path; count is the number of files at any depth
+     */
+    public static function pathTree(array $paths): array
+    {
+        $root = ['dirs' => [], 'files' => [], 'count' => 0];
+        foreach ($paths as $path) {
+            $parts = explode('/', (string) $path);
+            $name = array_pop($parts);
+            $node = &$root;
+            $node['count']++;
+            foreach ($parts as $part) {
+                $node['dirs'][$part] ??= ['dirs' => [], 'files' => [], 'count' => 0];
+                $node = &$node['dirs'][$part];
+                $node['count']++;
+            }
+            $node['files'][$name] = (string) $path;
+            unset($node);
+        }
+        return self::sortAndMerge($root);
+    }
+
+    private static function sortAndMerge(array $node): array
+    {
+        $dirs = [];
+        foreach ($node['dirs'] as $name => $child) {
+            $name = (string) $name;
+            while ($child['files'] === [] && count($child['dirs']) === 1) {
+                $only = (string) array_key_first($child['dirs']);
+                $name .= '/' . $only;
+                $child = $child['dirs'][$only];
+            }
+            $dirs[$name] = self::sortAndMerge($child);
+        }
+        uksort($dirs, 'strnatcasecmp');
+        $files = $node['files'];
+        uksort($files, 'strnatcasecmp');
+        return ['dirs' => $dirs, 'files' => $files, 'count' => $node['count']];
+    }
 }

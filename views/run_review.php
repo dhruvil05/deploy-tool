@@ -15,7 +15,7 @@ $deletes = array_filter($run['files'], static fn (array $f): bool => $f['action'
 $warnings = $isRollback ? [] : DeployRun::warnings($run);
 $new = count(array_filter($uploads, static fn (array $f): bool => $f['change'] === 'new'));
 $backedUp = count(array_filter($run['files'], static fn (array $f): bool => !empty($f['existed'])));
-$expires = (int) $run['reviewed_at'] + DeployRun::REVIEW_MINUTES * 60;
+$expires = (int) $run['reviewed_at'] + \DeployTool\Settings::reviewMinutes() * 60;
 $backupOf = $isRollback ? $run['rollback_of'] : $run['id'];
 $backupSize = \DeployTool\Backup::size($backupOf);
 $total = count($run['files']);

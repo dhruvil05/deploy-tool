@@ -102,10 +102,13 @@ final class Git
         return $commits;
     }
 
-    /** Unified diff between two local files (git works outside the repository with --no-index). */
-    public function diffFiles(string $fileA, string $fileB): string
+    /**
+     * Unified diff between two local files (git works outside the repository with --no-index),
+     * with $context unchanged lines around each change.
+     */
+    public function diffFiles(string $fileA, string $fileB, int $context = 3): string
     {
-        [, $stdout] = $this->run(['diff', '--no-index', '--no-color', '--no-ext-diff', '--', $fileA, $fileB]);
+        [, $stdout] = $this->run(['diff', '--no-index', '--no-color', '--no-ext-diff', '-U' . $context, '--', $fileA, $fileB]);
         return $stdout;
     }
 
@@ -131,6 +134,31 @@ final class Git
     {
         [$fullSha, $subject, $date, $author] = explode("\x1f", $this->ok(['log', '-1', '--format=%H%x1f%s%x1f%ci%x1f%an', $sha]));
         return ['sha' => $fullSha, 'subject' => $subject, 'date' => $date, 'author' => $author];
+    }
+
+    /**
+     * commitInfo() for several commits in one git call. Commits the repository doesn't have
+     * are left out.
+     *
+     * @return array<string, array{sha: string, subject: string, date: string, author: string}> by the sha asked for
+     */
+    public function commitInfos(array $shas): array
+    {
+        $shas = array_values(array_unique(array_filter($shas, static fn ($sha): bool => is_string($sha) && preg_match('/^[0-9a-f]{4,40}$/', $sha) === 1)));
+        if ($shas === []) {
+            return [];
+        }
+        [$code, $stdout] = $this->run(array_merge(['log', '--no-walk=unsorted', '--ignore-missing', '--format=%H%x1f%s%x1f%ci%x1f%an'], $shas));
+        $infos = [];
+        foreach ($code === 0 ? explode("\n", trim($stdout)) : [] as $line) {
+            [$fullSha, $subject, $date, $author] = explode("\x1f", $line) + ['', '', '', ''];
+            foreach ($shas as $sha) {
+                if ($fullSha !== '' && str_starts_with($fullSha, $sha)) {
+                    $infos[$sha] = ['sha' => $fullSha, 'subject' => $subject, 'date' => $date, 'author' => $author];
+                }
+            }
+        }
+        return $infos;
     }
 
     /** Number of commits in $to that are not in $from. */

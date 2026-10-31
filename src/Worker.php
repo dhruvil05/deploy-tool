@@ -52,6 +52,9 @@ final class Worker
         if ($run['status'] !== 'running' || self::isRunning($run['id'])) {
             return true;
         }
+        if (!Settings::backgroundRuns()) {
+            return false; // turned off in Settings: the run page steps it
+        }
         $started = @filemtime(self::startedFile($run['id']));
         if ($started !== false && time() - $started < self::START_SECONDS) {
             return true; // still starting

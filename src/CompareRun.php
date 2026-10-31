@@ -93,21 +93,34 @@ final class CompareRun
         RunStore::save($compare);
     }
 
-    /** A "match" run that uploads every file the compare found different or missing. */
-    public static function createSync(array $compare, bool $includeLineEndings): array
+    /**
+     * A "match" run that uploads the files the compare found different or missing.
+     * $selected limits it to the paths ticked on the result (null = every different or
+     * missing file); only paths the compare listed count, whatever the form sends.
+     */
+    public static function createSync(array $compare, ?array $selected, bool $includeLineEndings = false): array
     {
         $site = Sites::get($compare['site']) ?? throw new \RuntimeException('This site no longer exists.');
+        $wanted = $selected === null ? null : array_flip(array_map('strval', $selected));
+        $pick = static fn (string $path, bool $byDefault): bool => $wanted === null ? $byDefault : isset($wanted[$path]);
         $files = [];
         foreach ($compare['result']['differs'] as $path) {
-            $files[] = ['path' => $path, 'change' => 'changed'];
+            if ($pick((string) $path, true)) {
+                $files[] = ['path' => (string) $path, 'change' => 'changed'];
+            }
         }
         foreach ($compare['result']['missing'] as $path) {
-            $files[] = ['path' => $path, 'change' => 'new'];
-        }
-        if ($includeLineEndings) {
-            foreach ($compare['result']['eol'] as $path) {
-                $files[] = ['path' => $path, 'change' => 'changed'];
+            if ($pick((string) $path, true)) {
+                $files[] = ['path' => (string) $path, 'change' => 'new'];
             }
+        }
+        foreach ($compare['result']['eol'] as $path) {
+            if ($pick((string) $path, $includeLineEndings)) {
+                $files[] = ['path' => (string) $path, 'change' => 'changed'];
+            }
+        }
+        if ($files === [] && $selected !== null && ($compare['result']['differs'] || $compare['result']['missing'] || $compare['result']['eol'])) {
+            throw new \RuntimeException('No file is ticked. Tick the files to upload, or use "Record version" instead.');
         }
         if ($files === []) {
             throw new \RuntimeException('Nothing to upload: the server already matches. Use "Record version" instead.');

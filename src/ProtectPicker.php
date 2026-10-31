@@ -99,7 +99,16 @@ final class ProtectPicker
     /** Folders of a commit as folder => number of files under it (at any depth). */
     public static function foldersAt(Git $git, string $ref): array
     {
-        return self::folders(self::paths($git, $ref));
+        // A commit's tree never changes, so its folder list is kept per commit.
+        $cache = preg_match('/^[0-9a-f]{40}$/', $ref) ? STORAGE_DIR . "/cache/folders-$ref.json" : null;
+        if ($cache !== null && is_file($cache)) {
+            return JsonStore::readFile($cache);
+        }
+        $folders = self::folders(self::paths($git, $ref));
+        if ($cache !== null) {
+            JsonStore::writeFile($cache, $folders);
+        }
+        return $folders;
     }
 
     /**
