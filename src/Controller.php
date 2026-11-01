@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace DeployTool;
 
+use DeployTool\Ai\Provider;
+
 /** Dashboard, sites, locals and settings. Runs are in RunController. */
 final class Controller
 {
@@ -26,6 +28,15 @@ final class Controller
             'protect-add' => $this->protectAdd(),
             'settings' => $this->settings(),
             'settings-save' => $this->settingsSave(),
+            'ai-models' => $this->aiModels(),
+            'ai-test' => $this->aiTest(),
+            'storage-save' => $this->storageSave(),
+            'storage-browse' => $this->storageBrowse(),
+            'cloud-test' => $this->cloudTest(),
+            'cloud-backup-now' => $this->cloudBackupNow(),
+            'cloud-list' => $this->cloudList(),
+            'cloud-restore' => $this->cloudRestore(),
+            'assistant', 'assistant-new', 'assistant-send', 'assistant-poll', 'assistant-stop', 'assistant-rename', 'assistant-delete' => (new AssistantController())->handle($route),
             default => (new RunController())->handle($route),
         };
     }
@@ -48,6 +59,7 @@ final class Controller
 
         $runs = RunStore::all();
         $openRuns = RunStore::open($runs);
+        CloudBackup::maybeStart(); // the daily cloud backup, in the background, when one is due
         foreach ($openRuns as $run) {
             Worker::ensure($run); // picks up runs whose worker ended, for example after a restart
         }
@@ -244,19 +256,62 @@ final class Controller
 
     private function settings(): void
     {
-        $this->renderSettings(Settings::all(), []);
+        $this->renderSettings(Settings::all(), [], Ai::settings(), self::settingsTab($_GET['tab'] ?? null), CloudBackup::settings());
     }
 
     private function settingsSave(): void
     {
         Http::requirePost();
-        $errors = Settings::save($_POST);
+        $posted = array_map(static fn ($value): string => is_string($value) ? $value : '', $_POST);
+        // Every section is checked before anything is saved, so all mistakes show at once.
+        [$ai, $errors] = Ai::allowed() ? Ai::fromInput($_POST) : [Ai::settings(), []];
+        [$cloud, $cloudErrors] = CloudBackup::fromInput($_POST);
+        $errors += $cloudErrors + Settings::save($_POST, false);
         if ($errors) {
-            $this->renderSettings(array_merge(Settings::all(), array_map('strval', $_POST)), $errors);
+            // Open the section with the first mistake, unless the one in view has one too.
+            $tab = self::settingsTab($_POST['tab'] ?? null);
+            $tabs = array_map([Settings::class, 'tabOf'], array_keys($errors));
+            $this->renderSettings(array_merge(Settings::all(), $posted), $errors, $ai, in_array($tab, $tabs, true) ? $tab : $tabs[0], $cloud);
             return;
         }
+        Settings::save($_POST);
+        CloudBackup::save($cloud);
+        if (Ai::allowed()) {
+            Ai::save($ai);
+        }
         Http::flash('success', 'Settings saved.');
-        Http::redirect('r=settings');
+        Http::redirect('r=settings&tab=' . self::settingsTab($_POST['tab'] ?? null));
+    }
+
+    private static function settingsTab(mixed $tab): string
+    {
+        return in_array($tab, Settings::TABS, true) ? $tab : 'general';
+    }
+
+    /** Settings page: the provider's model list, for the form's current (unsaved) AI fields. */
+    private function aiModels(): void
+    {
+        $this->aiCall(static fn (Provider $provider): array => ['models' => $provider->models()]);
+    }
+
+    /** Settings page: one test request with the form's current (unsaved) AI fields. */
+    private function aiTest(): void
+    {
+        $this->aiCall(static fn (Provider $provider): array => $provider->test());
+    }
+
+    private function aiCall(callable $call): never
+    {
+        Http::requirePost();
+        if (!Ai::allowed()) {
+            Http::json(['ok' => false, 'error' => 'The AI assistant is turned off in .env.'], 404);
+        }
+        [$settings] = Ai::fromInput($_POST);
+        try {
+            Http::json(['ok' => true] + $call(new Provider($settings)));
+        } catch (\RuntimeException $e) {
+            Http::json(['ok' => false, 'error' => $e->getMessage()]);
+        }
     }
 
     private function renderSiteForm(array $site, array $errors, ?string $originalKey): void
@@ -280,12 +335,18 @@ final class Controller
         ], $originalKey === null ? 'Add local' : 'Edit local');
     }
 
-    private function renderSettings(array $values, array $errors): void
+    private function renderSettings(array $values, array $errors, array $ai, string $tab, array $cloud): void
     {
         View::render('settings', [
             'page' => 'settings',
+            'tab' => $tab,
+            'cloud' => $cloud,
+            'cloudSaved' => CloudBackup::settings(),
             'values' => $values,
             'errors' => $errors,
+            'aiAllowed' => Ai::allowed(),
+            'ai' => $ai,
+            'aiKeySaved' => Ai::settings()['api_key'] !== '',
             'gitBinary' => Settings::gitBinary($values['git_path'] ?? ''),
             'phpBinary' => Settings::phpBinary($values['php_path'] ?? ''),
             'sshBinary' => Settings::sshBinary($values['ssh_path'] ?? ''),
@@ -298,10 +359,106 @@ final class Controller
     {
         $backups = glob(STORAGE_DIR . '/backups/*.zip') ?: [];
         return [
-            'dir' => str_replace('/', '\\', (string) (realpath(STORAGE_DIR) ?: STORAGE_DIR)),
+            'dir' => StorageLocation::display(STORAGE_DIR),
+            'default' => StorageLocation::display(DEFAULT_STORAGE_DIR),
+            'isDefault' => StorageLocation::isDefault(),
+            'fromEnv' => StorageLocation::fromEnvironment(),
+            'missing' => STORAGE_MISSING,
+            'bytes' => StorageLocation::size(STORAGE_DIR),
             'runs' => count(glob(RunStore::dir() . '/*.json') ?: []),
             'backups' => count($backups),
             'backupBytes' => array_sum(array_map('filesize', $backups)),
         ];
+    }
+
+    /** Settings → Storage: switch the data folder (or back to storage/ here). */
+    private function storageSave(): void
+    {
+        Http::requirePost();
+        $useDefault = ($_POST['storage_mode'] ?? '') === 'default';
+        $path = trim((string) ($_POST['storage_path'] ?? ''));
+        try {
+            if (!$useDefault && $path === '') {
+                throw new \RuntimeException('Choose a folder, or pick "storage folder next to the tool".');
+            }
+            $from = StorageLocation::display(STORAGE_DIR);
+            StorageLocation::change($useDefault ? null : $path, ($_POST['storage_copy'] ?? '') === '1');
+            Http::flash('success', 'The tool now keeps its data in ' . StorageLocation::display($useDefault ? DEFAULT_STORAGE_DIR : $path)
+                . ". The old folder ($from) was left as it is; delete it yourself once you're sure.");
+        } catch (\RuntimeException $e) {
+            Http::flash('danger', $e->getMessage());
+        }
+        Http::redirect('r=settings&tab=storage');
+    }
+
+    /** Settings → Cloud backup: checks the bucket with the form's current (unsaved) fields. */
+    private function cloudTest(): void
+    {
+        Http::requirePost();
+        [$cloud, $errors] = CloudBackup::fromInput($_POST);
+        $missing = array_intersect_key($errors, array_flip(['cloud_endpoint', 'cloud_bucket', 'cloud_region', 'cloud_access_key', 'cloud_secret_key']));
+        if ($missing) {
+            Http::json(['ok' => false, 'error' => reset($missing)]);
+        }
+        try {
+            CloudBackup::test($cloud);
+            Http::json(['ok' => true, 'message' => "Connected: the bucket {$cloud['bucket']} answers with these keys."]);
+        } catch (\RuntimeException $e) {
+            Http::json(['ok' => false, 'error' => $e->getMessage()]);
+        }
+    }
+
+    /** Settings → Cloud backup: one backup now, with the saved settings. */
+    private function cloudBackupNow(): void
+    {
+        Http::requirePost();
+        session_write_close();
+        set_time_limit(900);
+        try {
+            $result = CloudBackup::backup();
+            Http::json(['ok' => true, 'message' => 'Backed up ' . $result['files'] . ' files (' . number_format($result['size'] / 1048576, 2) . ' MB, encrypted) as ' . basename($result['name']) . '.']);
+        } catch (\RuntimeException $e) {
+            Http::json(['ok' => false, 'error' => $e->getMessage()]);
+        }
+    }
+
+    /** Settings → Cloud backup: the backups in the bucket. */
+    private function cloudList(): void
+    {
+        Http::requirePost();
+        try {
+            Http::json(['ok' => true, 'backups' => array_map(static fn (array $b): array => [
+                'key' => $b['key'],
+                'name' => $b['name'],
+                'size' => number_format($b['size'] / 1048576, 2) . ' MB',
+                'when' => date('d M Y, H:i', $b['modified']) . ' · ' . ago($b['modified']),
+            ], CloudBackup::list())]);
+        } catch (\RuntimeException $e) {
+            Http::json(['ok' => false, 'error' => $e->getMessage()]);
+        }
+    }
+
+    private function cloudRestore(): void
+    {
+        Http::requirePost();
+        set_time_limit(900);
+        try {
+            $result = CloudBackup::restore((string) ($_POST['key'] ?? ''), (string) ($_POST['passphrase'] ?? ''));
+            Http::flash('success', "Restored {$result['files']} files from " . basename((string) $_POST['key']) . ". The data from before is in {$result['safety']}.");
+        } catch (\RuntimeException $e) {
+            Http::flash('danger', 'Not restored: ' . $e->getMessage());
+        }
+        Http::redirect('r=settings&tab=cloud');
+    }
+
+    /** Settings → Storage: folders for the picker. */
+    private function storageBrowse(): void
+    {
+        Http::requireToken();
+        try {
+            Http::json(['ok' => true] + StorageLocation::browse((string) ($_GET['path'] ?? '')));
+        } catch (\RuntimeException $e) {
+            Http::json(['ok' => false, 'error' => $e->getMessage()]);
+        }
     }
 }

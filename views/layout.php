@@ -14,6 +14,9 @@ $nav = [
     'sites' => ['index.php?r=sites', 'Sites'],
     'settings' => ['index.php?r=settings', 'Settings'],
 ];
+if (\DeployTool\Ai::enabled()) {
+    $nav['assistant'] = ['index.php?r=assistant', 'Assistant'];
+}
 ?>
 <!doctype html>
 <html lang="en">

@@ -86,19 +86,23 @@ final class Worker
         return STORAGE_DIR . '/worker.log';
     }
 
-    /**
-     * Starts "php src/run-worker.php <id>" detached from this request. On Windows it goes
-     * through PowerShell's Start-Process, so the worker has no window and doesn't end when
-     * the window that started the tool is closed.
-     */
     private static function spawn(string $id): bool
     {
+        return self::spawnScript(APP_ROOT . DIRECTORY_SEPARATOR . 'src' . DIRECTORY_SEPARATOR . 'run-worker.php', [$id]);
+    }
+
+    /**
+     * Starts "php <script> <args>" detached from this request (run workers, cloud backups).
+     * On Windows it goes through PowerShell's Start-Process, so it has no window and doesn't
+     * end when the window that started the tool is closed. Arguments must be simple words.
+     */
+    public static function spawnScript(string $script, array $args): bool
+    {
         $php = Settings::phpBinary();
-        $script = APP_ROOT . DIRECTORY_SEPARATOR . 'src' . DIRECTORY_SEPARATOR . 'run-worker.php';
         if (PHP_OS_FAMILY === 'Windows') {
             $quote = static fn (string $value): string => "'" . str_replace("'", "''", $value) . "'";
             $command = 'Start-Process -WindowStyle Hidden -FilePath ' . $quote($php)
-                . ' -ArgumentList ' . $quote('"' . $script . '"') . ', ' . $quote($id);
+                . ' -ArgumentList ' . implode(', ', array_merge([$quote('"' . $script . '"')], array_map($quote, $args)));
             $process = proc_open(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $command], [
                 0 => ['file', 'NUL', 'r'],
                 1 => ['file', 'NUL', 'w'],
@@ -106,7 +110,7 @@ final class Worker
             ], $pipes);
             return is_resource($process) && proc_close($process) === 0;
         }
-        exec(escapeshellarg($php) . ' ' . escapeshellarg($script) . ' ' . escapeshellarg($id)
+        exec(escapeshellarg($php) . ' ' . escapeshellarg($script) . implode('', array_map(static fn (string $arg): string => ' ' . escapeshellarg($arg), $args))
             . ' >> ' . escapeshellarg(self::logFile()) . ' 2>&1 < /dev/null &', $output, $code);
         return $code === 0;
     }

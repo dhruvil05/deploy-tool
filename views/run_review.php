@@ -41,6 +41,14 @@ $buttonLabel = match (true) {
         <div class="notice notice-warning"><?= e($run['checkout_warning']) ?></div>
     <?php endif ?>
 
+    <?php if (!empty($run['excluded'])): ?>
+        <div class="notice notice-info">
+            <?= count($run['excluded']) ?> file(s) left out of this run, so they stay as they are on the server:
+            <?php foreach (array_slice($run['excluded'], 0, 20) as $file): ?><code><?= e($file['path']) ?></code> <?php endforeach ?>
+            <?= count($run['excluded']) > 20 ? '…' : '' ?>
+        </div>
+    <?php endif ?>
+
     <?php if ($warnings): ?>
         <div class="notice notice-warning">
             <?= count($warnings) ?> file(s) are not what we expected on the server: edited directly on the server, already there, or missing.

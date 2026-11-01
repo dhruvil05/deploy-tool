@@ -569,6 +569,605 @@
         });
     });
 
+    // Settings: the side menu shows one section at a time without reloading. The open section
+    // is kept in the address and sent with the form, so saving comes back to it.
+    const settingsForm = document.querySelector('.js-settings-form');
+    if (settingsForm) {
+        const settingsTabs = [...document.querySelectorAll('.js-settings-tab')];
+        const current = settingsForm.querySelector('.js-settings-current');
+        const showTab = (name, focus = false) => {
+            settingsTabs.forEach((link) => {
+                const on = link.dataset.tab === name;
+                link.classList.toggle('active', on);
+                link.setAttribute('aria-selected', String(on));
+                link.tabIndex = on ? 0 : -1;
+                if (on && focus) {
+                    link.focus();
+                }
+            });
+            document.querySelectorAll('.js-settings-pane').forEach((pane) => { pane.hidden = pane.dataset.tab !== name; });
+            current.value = name;
+            window.history.replaceState(null, '', 'index.php?r=settings&tab=' + encodeURIComponent(name));
+        };
+        settingsTabs.forEach((link, index) => {
+            link.tabIndex = link.classList.contains('active') ? 0 : -1;
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                showTab(link.dataset.tab);
+            });
+            link.addEventListener('keydown', (event) => {
+                const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[event.key];
+                if (step) {
+                    event.preventDefault();
+                    showTab(settingsTabs[(index + step + settingsTabs.length) % settingsTabs.length].dataset.tab, true);
+                }
+            });
+        });
+        document.querySelectorAll('.js-settings-goto').forEach((link) => link.addEventListener('click', (event) => {
+            event.preventDefault();
+            showTab(link.dataset.tab);
+            window.scrollTo(0, 0);
+        }));
+        // Storage: default folder or one you choose, with a folder picker that lists this
+        // computer's drives and folders.
+        const customBlock = document.querySelector('.js-storage-custom');
+        if (customBlock) {
+            const modes = [...document.querySelectorAll('.js-storage-mode')];
+            const pathInput = document.getElementById('storage_path');
+            const picker = customBlock.querySelector('.js-folder-picker');
+            const list = picker.querySelector('.js-folder-list');
+            const current = picker.querySelector('.js-folder-current');
+            const note = picker.querySelector('.js-folder-note');
+            const up = picker.querySelector('.js-folder-up');
+            const use = picker.querySelector('.js-folder-use');
+            let shown = null;
+            const copyBox = document.querySelector('input[name="storage_copy"]');
+            modes.forEach((radio) => radio.addEventListener('change', () => {
+                customBlock.hidden = radio.value !== 'custom' || !radio.checked;
+                // Back to the default folder: it usually still holds the data from before.
+                copyBox.checked = radio.value === 'custom';
+            }));
+            const browse = async (path) => {
+                note.hidden = true;
+                try {
+                    const response = await fetch('index.php?r=storage-browse&path=' + encodeURIComponent(path), { headers: { Accept: 'application/json', 'X-CSRF-Token': token } });
+                    const answer = await response.json();
+                    if (!answer.ok) {
+                        throw new Error(answer.error);
+                    }
+                    shown = answer;
+                    current.textContent = answer.path || 'This computer';
+                    up.disabled = answer.parent === null;
+                    use.disabled = answer.path === '';
+                    list.replaceChildren(...answer.folders.map((folder) => {
+                        const item = document.createElement('li');
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.textContent = folder.name;
+                        button.addEventListener('click', () => browse(folder.path));
+                        item.append(button);
+                        return item;
+                    }));
+                    if (!answer.folders.length) {
+                        const empty = document.createElement('li');
+                        empty.className = 'meta';
+                        empty.textContent = 'No folders inside. You can use this one.';
+                        list.append(empty);
+                    }
+                    if (answer.hasData || (answer.path && !answer.writable)) {
+                        note.textContent = answer.hasData
+                            ? 'This folder already has deploy tool data: untick "Copy my current data" to use it as it is.'
+                            : 'The tool may not be able to write here.';
+                        note.hidden = false;
+                    }
+                } catch (error) {
+                    note.textContent = error.message || 'Could not list that folder.';
+                    note.hidden = false;
+                }
+            };
+            customBlock.querySelector('.js-folder-browse').addEventListener('click', () => {
+                picker.hidden = !picker.hidden;
+                if (!picker.hidden) {
+                    browse(pathInput.value.trim());
+                }
+            });
+            up.addEventListener('click', () => shown && shown.parent !== null && browse(shown.parent));
+            use.addEventListener('click', () => {
+                if (shown && shown.path) {
+                    pathInput.value = shown.path;
+                    picker.hidden = true;
+                }
+            });
+        }
+
+        // Cloud backup: presets fill the endpoint and region; Test, Back up now and the list
+        // of backups talk to the tool without leaving the page.
+        const cloudResult = document.querySelector('.js-cloud-result');
+        if (cloudResult) {
+            const endpoint = document.getElementById('cloud_endpoint');
+            const region = document.getElementById('cloud_region');
+            document.querySelectorAll('.js-cloud-provider').forEach((radio) => radio.addEventListener('change', () => {
+                if (radio.dataset.endpoint !== '' && (endpoint.value === '' || [...document.querySelectorAll('.js-cloud-provider')].some((other) => other.dataset.endpoint === endpoint.value))) {
+                    endpoint.value = radio.dataset.endpoint;
+                }
+                region.value = radio.dataset.region;
+            }));
+            const say = (text, kind) => {
+                cloudResult.textContent = text;
+                cloudResult.className = 'meta js-cloud-result' + (kind ? ' cloud-' + kind : '');
+            };
+            const ask = async (button, route, body) => {
+                const label = button.textContent;
+                button.disabled = true;
+                button.textContent = button.dataset.busy || label;
+                try {
+                    const response = await fetch('index.php?r=' + route, { method: 'POST', headers: { Accept: 'application/json' }, body });
+                    return await response.json();
+                } catch (error) {
+                    return { ok: false, error: 'Could not reach the tool. Check that it is still running.' };
+                } finally {
+                    button.disabled = false;
+                    button.textContent = label;
+                }
+            };
+            const tokenOnly = () => {
+                const body = new FormData();
+                body.append('_csrf', token);
+                return body;
+            };
+            document.querySelector('.js-cloud-test').addEventListener('click', async (event) => {
+                const answer = await ask(event.currentTarget, 'cloud-test', new FormData(settingsForm));
+                say(answer.ok ? answer.message : answer.error, answer.ok ? 'ok' : 'bad');
+            });
+            document.querySelector('.js-cloud-now').addEventListener('click', async (event) => {
+                say('Zipping, encrypting and uploading…', '');
+                const answer = await ask(event.currentTarget, 'cloud-backup-now', tokenOnly());
+                say(answer.ok ? answer.message : answer.error, answer.ok ? 'ok' : 'bad');
+            });
+            const backups = document.querySelector('.js-cloud-backups');
+            document.querySelector('.js-cloud-list').addEventListener('click', async (event) => {
+                backups.replaceChildren();
+                const answer = await ask(event.currentTarget, 'cloud-list', tokenOnly());
+                const line = (text, className) => {
+                    const item = document.createElement('li');
+                    item.className = className;
+                    item.textContent = text;
+                    return item;
+                };
+                if (!answer.ok) {
+                    backups.append(line(answer.error, 'error-text'));
+                    return;
+                }
+                if (!answer.backups.length) {
+                    backups.append(line('No backups in the bucket yet.', 'meta'));
+                    return;
+                }
+                const restoreForm = document.getElementById('cloud-restore-form');
+                backups.append(...answer.backups.map((backup) => {
+                    const item = document.createElement('li');
+                    const text = document.createElement('span');
+                    const name = document.createElement('code');
+                    name.textContent = backup.name;
+                    const meta = document.createElement('span');
+                    meta.className = 'meta';
+                    meta.textContent = `${backup.when} · ${backup.size}`;
+                    text.append(name, meta);
+                    const restore = document.createElement('button');
+                    restore.type = 'button';
+                    restore.className = 'small';
+                    restore.textContent = 'Restore…';
+                    restore.addEventListener('click', () => {
+                        const passphrase = window.prompt(`Restore ${backup.name}?\n\nThis replaces this computer's data; what's here now is saved to restore-safety first.\n\nPassphrase (leave blank to use the saved one):`, '');
+                        if (passphrase === null) {
+                            return;
+                        }
+                        restoreForm.querySelector('.js-cloud-restore-key').value = backup.key;
+                        restoreForm.querySelector('.js-cloud-restore-pass').value = passphrase;
+                        restoreForm.submit();
+                    });
+                    item.append(text, restore);
+                    return item;
+                }));
+            });
+        }
+
+        // On a phone the menu is a sideways strip: bring the open section into view.
+        const activeTab = settingsTabs.find((link) => link.classList.contains('active'));
+        if (activeTab) {
+            activeTab.parentElement.scrollLeft = activeTab.offsetLeft - activeTab.parentElement.offsetLeft - 8;
+        }
+        const dirty = settingsForm.querySelector('.js-settings-dirty');
+        const markDirty = () => { dirty.hidden = false; };
+        settingsForm.addEventListener('input', markDirty);
+        settingsForm.addEventListener('change', markDirty);
+    }
+
+    // Settings → AI assistant: provider presets fill the base URL; Load models and Test use
+    // the form as it is now, saved or not.
+    const aiCard = document.querySelector('.js-ai-card');
+    if (aiCard) {
+        const form = aiCard.closest('form');
+        const base = aiCard.querySelector('#ai_base_url');
+        const providers = [...aiCard.querySelectorAll('.js-ai-provider')];
+        const noKey = aiCard.querySelector('.js-ai-nokey');
+        const syncKeyHint = () => {
+            const chosen = providers.find((radio) => radio.checked);
+            noKey.hidden = !chosen || chosen.dataset.key === '1';
+        };
+        providers.forEach((radio) => radio.addEventListener('change', () => {
+            if (radio.dataset.base !== '') {
+                base.value = radio.dataset.base;
+            }
+            syncKeyHint();
+        }));
+        syncKeyHint();
+
+        const call = async (button, route) => {
+            const label = button.textContent;
+            button.disabled = true;
+            button.textContent = button.dataset.busy;
+            try {
+                const response = await fetch('index.php?r=' + route, {
+                    method: 'POST',
+                    headers: { Accept: 'application/json' },
+                    body: new FormData(form),
+                });
+                return await response.json();
+            } catch (error) {
+                return { ok: false, error: 'Could not reach the tool. Check that it is still running.' };
+            } finally {
+                button.disabled = false;
+                button.textContent = label;
+            }
+        };
+
+        const modelsButton = aiCard.querySelector('.js-ai-models');
+        const modelsStatus = aiCard.querySelector('.js-ai-models-status');
+        modelsButton.addEventListener('click', async () => {
+            const answer = await call(modelsButton, 'ai-models');
+            if (!answer.ok) {
+                modelsStatus.textContent = answer.error;
+                modelsStatus.className = 'help error-text js-ai-models-status';
+                return;
+            }
+            aiCard.querySelector('#ai-model-list').replaceChildren(...answer.models.map((id) => {
+                const option = document.createElement('option');
+                option.value = id;
+                return option;
+            }));
+            modelsStatus.className = 'help js-ai-models-status';
+            modelsStatus.textContent = answer.models.length
+                ? `Loaded ${answer.models.length} models: click the Model box and type to filter.`
+                : 'The provider listed no models. Type the model name yourself.';
+        });
+
+        const testButton = aiCard.querySelector('.js-ai-test');
+        const testResult = aiCard.querySelector('.js-ai-test-result');
+        testButton.addEventListener('click', async () => {
+            const answer = await call(testButton, 'ai-test');
+            const box = document.createElement('div');
+            const title = document.createElement('strong');
+            const text = document.createElement('span');
+            if (!answer.ok) {
+                box.className = 'notice notice-danger';
+                title.textContent = 'Not working';
+                text.textContent = answer.error;
+            } else if (answer.tools) {
+                box.className = 'notice notice-success';
+                title.textContent = `Connected · answered in ${answer.seconds} s`;
+                text.textContent = 'This model supports tool calling, so the assistant can use the tool\'s features.';
+            } else {
+                box.className = 'notice notice-warning';
+                title.textContent = `Connected · answered in ${answer.seconds} s`;
+                text.textContent = 'But it didn\'t call the test tool, so it may not support tool calling. Try another model.';
+            }
+            box.append(title, text);
+            testResult.replaceChildren(box);
+        });
+    }
+
+    // Assistant chat list: a delete button on each chat, and Select mode for deleting
+    // several. Works on the list as it is re-drawn after answers and renames.
+    const chatListCard = document.querySelector('.js-chat-list-card');
+    if (chatListCard) {
+        const chatList = chatListCard.querySelector('.js-chat-list');
+        const deleteForm = chatListCard.querySelector('.js-chat-delete-form');
+        const selectButton = chatListCard.querySelector('.js-chat-select');
+        const selectBar = chatListCard.querySelector('.js-chat-select-bar');
+        const selectAll = chatListCard.querySelector('.js-chat-select-all');
+        const deleteSelected = chatListCard.querySelector('.js-chat-delete-selected');
+        const picks = () => [...chatList.querySelectorAll('.js-chat-pick')];
+        const sendDelete = (ids) => {
+            deleteForm.querySelectorAll('input[name="chats[]"]').forEach((input) => input.remove());
+            ids.forEach((id) => {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'chats[]';
+                input.value = id;
+                deleteForm.append(input);
+            });
+            // The page may have moved to a chat made after it loaded.
+            const open = new URLSearchParams(window.location.search).get('chat');
+            deleteForm.querySelector('.js-chat-delete-back').value = open || '';
+            deleteForm.submit();
+        };
+        const updateSelection = () => {
+            const chosen = picks().filter((box) => box.checked);
+            deleteSelected.disabled = chosen.length === 0;
+            deleteSelected.textContent = chosen.length ? `Delete ${chosen.length}` : 'Delete';
+            selectAll.checked = chosen.length > 0 && chosen.length === picks().length;
+            selectAll.indeterminate = chosen.length > 0 && chosen.length < picks().length;
+        };
+        const selecting = (on) => {
+            chatListCard.classList.toggle('is-selecting', on);
+            selectBar.hidden = !on;
+            selectButton.hidden = on;
+            picks().forEach((box) => { box.checked = false; });
+            updateSelection();
+        };
+        selectButton.addEventListener('click', () => selecting(true));
+        chatListCard.querySelector('.js-chat-select-done').addEventListener('click', () => selecting(false));
+        selectAll.addEventListener('change', () => {
+            picks().forEach((box) => { box.checked = selectAll.checked; });
+            updateSelection();
+        });
+        deleteSelected.addEventListener('click', () => {
+            const ids = picks().filter((box) => box.checked).map((box) => box.value);
+            if (ids.length && window.confirm(`Delete ${ids.length} chat${ids.length === 1 ? '' : 's'}? This can't be undone.`)) {
+                sendDelete(ids);
+            }
+        });
+        chatList.addEventListener('change', (event) => {
+            if (event.target.matches('.js-chat-pick')) {
+                updateSelection();
+            }
+        });
+        chatList.addEventListener('click', (event) => {
+            const remove = event.target.closest('.js-chat-delete');
+            if (remove) {
+                if (window.confirm(`Delete the chat "${remove.dataset.title}"? This can't be undone.`)) {
+                    sendDelete([remove.closest('[data-chat]').dataset.chat]);
+                }
+                return;
+            }
+            // In Select mode a click on a chat ticks it instead of opening it.
+            const link = event.target.closest('a');
+            if (link && chatListCard.classList.contains('is-selecting')) {
+                event.preventDefault();
+                const box = link.closest('[data-chat]').querySelector('.js-chat-pick');
+                box.checked = !box.checked;
+                updateSelection();
+            }
+        });
+    }
+
+    // Assistant: send a message without leaving the page. The message shows at once; while
+    // the assistant works, its actions appear as it does them (polled every second), and
+    // Stop asks it to stop after the current step. Then its answer replaces the progress.
+    const chatForm = document.querySelector('.js-chat-form');
+    if (chatForm) {
+        const log = document.querySelector('.js-chat-log');
+        const input = chatForm.querySelector('textarea');
+        const send = chatForm.querySelector('button[type="submit"]');
+        const stop = chatForm.querySelector('.js-chat-stop');
+        const usage = document.querySelector('.js-chat-usage');
+        const chatField = chatForm.querySelector('input[name="chat"]');
+        const post = async (route, fields) => {
+            const body = new FormData();
+            body.append('_csrf', token);
+            Object.entries(fields).forEach(([key, value]) => body.append(key, value));
+            const response = await fetch('index.php?r=' + route, { method: 'POST', headers: { Accept: 'application/json' }, body });
+            return response.json();
+        };
+        const scrollDown = () => { log.scrollTop = log.scrollHeight; };
+        const bubble = (className, text) => {
+            const node = document.createElement('div');
+            node.className = className;
+            node.textContent = text;
+            log.append(node);
+            scrollDown();
+            return node;
+        };
+        const showUsage = (text) => {
+            usage.textContent = text;
+            usage.hidden = false;
+        };
+        // The answer in progress: what the server has so far, plus a "working" line.
+        const live = (() => {
+            let box = null;
+            let pollTimer = null;
+            let finished = true;
+            const working = () => {
+                const line = document.createElement('div');
+                line.className = 'chat-bot chat-pending';
+                line.textContent = 'Working on it…';
+                return line;
+            };
+            const render = (html) => {
+                box.innerHTML = html; // escaped by the server's template
+                if (!finished) {
+                    box.append(working());
+                }
+                scrollDown();
+            };
+            const poll = async () => {
+                try {
+                    const answer = await (await fetch('index.php?r=assistant-poll&chat=' + encodeURIComponent(chatField.value), { headers: { Accept: 'application/json' } })).json();
+                    if (finished || !answer.ok) {
+                        return;
+                    }
+                    render(answer.html);
+                    showUsage(answer.usage);
+                    if (!answer.busy && box.dataset.reloadWhenDone === '1') {
+                        window.location.reload();
+                        return;
+                    }
+                } catch (error) {
+                    // the next poll tries again
+                }
+                if (!finished) {
+                    pollTimer = setTimeout(poll, 1000);
+                }
+            };
+            return {
+                start(reloadWhenDone = false) {
+                    finished = false;
+                    box = document.createElement('div');
+                    box.className = 'chat-live';
+                    box.dataset.reloadWhenDone = reloadWhenDone ? '1' : '';
+                    log.append(box);
+                    render('');
+                    pollTimer = setTimeout(poll, 800);
+                    stop.hidden = false;
+                    stop.disabled = false;
+                    stop.textContent = 'Stop';
+                    send.disabled = true;
+                },
+                finish(html) {
+                    finished = true;
+                    clearTimeout(pollTimer);
+                    render(html);
+                    stop.hidden = true;
+                    send.disabled = false;
+                },
+                fail(message) {
+                    finished = true;
+                    clearTimeout(pollTimer);
+                    box.replaceChildren();
+                    const note = document.createElement('div');
+                    note.className = 'chat-bot is-error';
+                    note.textContent = message;
+                    box.append(note);
+                    stop.hidden = true;
+                    send.disabled = false;
+                },
+            };
+        })();
+        scrollDown();
+        if (log.dataset.busy === '1') {
+            live.start(true); // the page was reloaded mid-answer: follow it, then show the result
+        }
+
+        stop.addEventListener('click', async () => {
+            stop.disabled = true;
+            stop.textContent = 'Stopping…';
+            try {
+                await post('assistant-stop', { chat: chatField.value });
+            } catch (error) {
+                stop.disabled = false;
+                stop.textContent = 'Stop';
+            }
+        });
+
+        // Rename: the pencil turns the title into a text box. Enter or leaving it saves,
+        // Esc cancels.
+        const title = document.querySelector('.js-chat-title');
+        const titleInput = document.querySelector('.js-chat-title-input');
+        const renameButton = document.querySelector('.js-chat-rename');
+        const closeRename = () => {
+            titleInput.hidden = true;
+            title.hidden = false;
+            renameButton.hidden = false;
+        };
+        const saveRename = async () => {
+            const name = titleInput.value.trim();
+            if (titleInput.hidden) {
+                return;
+            }
+            if (name === '' || name === title.textContent) {
+                closeRename();
+                return;
+            }
+            titleInput.disabled = true;
+            try {
+                const answer = await post('assistant-rename', { chat: chatField.value, title: name });
+                if (!answer.ok) {
+                    throw new Error(answer.error);
+                }
+                title.textContent = answer.title;
+                document.querySelector('.js-chat-list').innerHTML = answer.list;
+            } catch (error) {
+                window.alert(error.message || 'Could not rename the chat.');
+            } finally {
+                titleInput.disabled = false;
+                closeRename();
+            }
+        };
+        renameButton.addEventListener('click', () => {
+            titleInput.value = title.textContent;
+            title.hidden = true;
+            renameButton.hidden = true;
+            titleInput.hidden = false;
+            titleInput.focus();
+            titleInput.select();
+        });
+        titleInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                saveRename();
+            } else if (event.key === 'Escape') {
+                closeRename();
+            }
+        });
+        titleInput.addEventListener('blur', saveRename);
+
+        chatForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const text = input.value.trim();
+            if (text === '' || send.disabled) {
+                return;
+            }
+            document.querySelector('.js-chat-empty')?.remove();
+            bubble('chat-user', text);
+            input.value = '';
+            send.disabled = true;
+            try {
+                if (chatField.value === '') {
+                    // A new chat gets its id first, so its progress can be followed.
+                    const created = await post('assistant-new', { local: document.querySelector('.chat-local select')?.value || '' });
+                    if (!created.ok) {
+                        throw new Error(created.error);
+                    }
+                    chatField.value = created.chat;
+                    document.querySelector('.js-chat-rename').hidden = false;
+                    window.history.replaceState(null, '', 'index.php?r=assistant&chat=' + encodeURIComponent(created.chat));
+                    const picker = document.querySelector('.chat-local'); // a chat keeps its local
+                    if (picker) {
+                        const pill = document.createElement('span');
+                        pill.className = 'pill';
+                        pill.textContent = picker.querySelector('select').selectedOptions[0].text;
+                        picker.replaceWith(pill);
+                    }
+                }
+                live.start();
+                const answer = await post('assistant-send', { chat: chatField.value, message: text });
+                if (!answer.ok) {
+                    throw new Error(answer.error || 'The assistant could not answer.');
+                }
+                live.finish(answer.html);
+                showUsage(answer.usage);
+                document.querySelector('.js-chat-list').innerHTML = answer.list;
+                document.querySelector('.js-chat-title').textContent = answer.title;
+            } catch (error) {
+                live.fail(error.message || 'Could not reach the tool. Check that it is still running.');
+                input.value = text;
+            } finally {
+                scrollDown();
+                input.focus();
+            }
+        });
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+                event.preventDefault();
+                chatForm.requestSubmit();
+            }
+        });
+        document.querySelectorAll('.js-suggest').forEach((button) => button.addEventListener('click', () => {
+            input.value = button.dataset.text;
+            chatForm.requestSubmit();
+        }));
+    }
+
     // History filters: apply as soon as a dropdown changes (search applies on Enter).
     document.querySelectorAll('.js-autosubmit select').forEach((select) => {
         select.addEventListener('change', () => select.form.submit());

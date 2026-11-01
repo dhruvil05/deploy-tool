@@ -54,6 +54,10 @@ final class Runner
             }
             self::applyStopFlag($run);
             RunStore::save($run);
+            // A deploy, match or rollback just changed a server: a cloud backup may be due.
+            if (in_array($run['type'], RunStore::CHANGING_TYPES, true) && !empty($run['touched']) && in_array($run['status'], ['sql', 'done'], true)) {
+                CloudBackup::maybeStart(true);
+            }
             return $run;
         } finally {
             flock($lock, LOCK_UN);
