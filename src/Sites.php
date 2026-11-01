@@ -371,8 +371,10 @@ final class Sites
     /**
      * Validates and saves a site. $originalKey is null when adding.
      * Returns [errors, site]; nothing is saved when there are errors.
+     * $passwordLater lets an FTP site be saved without its password (the assistant never
+     * handles passwords; the user adds it on the site's page).
      */
-    public static function save(array $input, ?string $originalKey): array
+    public static function save(array $input, ?string $originalKey, bool $passwordLater = false): array
     {
         $sites = self::all();
         $existing = $originalKey !== null ? ($sites[$originalKey] ?? null) : null;
@@ -461,7 +463,7 @@ final class Sites
             if ($site['username'] === '') {
                 $errors['username'] = 'Enter the FTP username.';
             }
-            if ($site['password'] === '') {
+            if ($site['password'] === '' && !$passwordLater) {
                 $errors['password'] = 'Enter the FTP password.';
             }
             if (str_contains($site['root'], '..')) {

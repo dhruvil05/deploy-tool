@@ -36,43 +36,7 @@ final class RunController
     private function deployNew(): void
     {
         $site = $this->site((string) ($_GET['site'] ?? ''));
-        $git = Sites::git($site);
-        $data = [
-            'page' => 'dashboard',
-            'site' => $site,
-            'open' => RunStore::activeRunFor($site['key']),
-            'source' => null,
-            'sourceError' => null,
-            'state' => null,
-            'stateError' => null,
-            'commits' => [],
-            'changes' => null,
-        ];
-        try {
-            $data['source'] = $git->commitInfo(DeployRun::sourceCommit($site, $git));
-        } catch (\RuntimeException $e) {
-            $data['sourceError'] = $e->getMessage();
-        }
-        try {
-            $data['state'] = ServerState::read(Sites::transport($site));
-        } catch (\RuntimeException $e) {
-            $data['stateError'] = $e->getMessage();
-        }
-        if ($data['source'] !== null && $data['stateError'] === null) {
-            if ($data['state'] === null) {
-                $data['commits'] = $git->recentCommits($data['source']['sha'], 30);
-            } elseif ($git->resolve($data['state']['commit']) !== null) {
-                $range = $data['state']['commit'] . '..' . $data['source']['sha'];
-                $commits = $git->recentCommits($range, 50);
-                $data['changes'] = [
-                    'commits' => count($commits) < 50 ? count($commits) : $git->countBetween($data['state']['commit'], $data['source']['sha']),
-                    'list' => $commits,
-                    'files' => $git->changedFiles($data['state']['commit'], $data['source']['sha']),
-                    'protected' => ProtectedPaths::regexes(Sites::rootSource($site)),
-                ];
-            }
-        }
-        View::render('deploy_new', $data, 'Deploy to ' . $site['name']);
+        View::render('deploy_new', ['page' => 'dashboard', 'site' => $site] + DeployRun::preview($site), 'Deploy to ' . $site['name']);
     }
 
     private function deployStart(): void
@@ -291,31 +255,13 @@ final class RunController
         }
 
         $git = Sources::git(RunStore::source($run));
-        if ($run['type'] === 'rollback') {
-            $before = $git->fileAt($run['from'], $path);
-            $after = $file['action'] === 'restore' ? Backup::get($run['rollback_of'], $path) : null;
-            $labels = ['now (after the deploy)', 'after the rollback'];
-        } elseif ($kind === 'server') {
-            $before = $run['from'] !== null ? $git->fileAt($run['from'], $path) : null;
-            $after = Backup::get($run['id'], $path);
-            $labels = ['expected (commit ' . short_sha($run['from']) . ')', 'actually on the server'];
-        } else {
-            $before = Backup::get($run['id'], $path);
-            $after = $file['action'] === 'upload' ? $git->fileAt($run['to'], $path) : null;
-            $labels = ['on the server before', 'after this run'];
-        }
+        [$before, $after, $labels] = DiffView::sides($run, $file, $kind, $git);
 
         $options = [
             'view' => ($_GET['view'] ?? '') === 'split' ? 'split' : 'unified',
             'ctx' => in_array($_GET['ctx'] ?? '', ['10', 'all'], true) ? (string) $_GET['ctx'] : '3',
         ];
-        $fileA = tempnam(sys_get_temp_dir(), 'dtdiffa');
-        $fileB = tempnam(sys_get_temp_dir(), 'dtdiffb');
-        file_put_contents($fileA, $before ?? '');
-        file_put_contents($fileB, $after ?? '');
-        $text = $git->diffFiles($fileA, $fileB, $options['ctx'] === 'all' ? 1000000 : (int) $options['ctx']);
-        @unlink($fileA);
-        @unlink($fileB);
+        $text = DiffView::text($git, $before, $after, $options['ctx'] === 'all' ? 1000000 : (int) $options['ctx']);
 
         $paths = array_column($run['files'], 'path');
         $index = (int) array_search($path, $paths, true);

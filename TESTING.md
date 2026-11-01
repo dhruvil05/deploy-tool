@@ -140,6 +140,28 @@ On the real staging site: **Compare** with "File sizes over FTP". It should be a
 than before (the old run took about 45–60 minutes). If the host refuses connections, set
 "Connections at once" to 2 or 1.
 
+## AI assistant
+
+Use the test folder sites from section 1, not staging or prod, for anything that prepares a run.
+
+1. **Settings → AI assistant**: pick OpenRouter, paste your key, **Load models**, pick one,
+   **Test** → green "supports tool calling". (Free option: install Ollama, `ollama pull
+   qwen2.5:7b`, pick Ollama, type `qwen2.5:7b`, Test.) Tick **Enable AI assistant**, Save.
+2. **Assistant** appears in the menu. New chat, pick the local, ask
+   "Is Test staging up to date?" → it lists what it did (✓ Checked Test staging …) and answers.
+3. Ask "Compare Test staging with its commit" → ✓ Started a compare, ✓ Waited for run,
+   then the result in words. **Open** opens the run.
+4. Ask "Prepare a deploy to Test staging" → it stops at **Ready for your review** with an
+   **Open review** button. Nothing on the site has changed until you approve on that page.
+5. Ask it to approve or roll back → it says it can't and where to click.
+6. Mark Test prod as Production, then ask "Prepare a deploy to Test prod" → it asks you to
+   confirm first.
+7. A wrong key in Settings → the chat shows a red "The provider refused the API key" bubble.
+8. Untick **Enable AI assistant** → the menu item goes, and `index.php?r=assistant` says it's
+   switched off.
+9. Create `.env` with `DEPLOY_TOOL_AI=false` → Settings shows "Turned off in .env", there is no
+   Assistant page. Delete `.env` (or set `true`) to bring it back.
+
 ## Later: test over FTP, on a server that isn't staging or prod
 
 Folder sites test everything except the FTP connection itself. To test FTP:

@@ -1,3 +1,4 @@
 /storage/*
 !/storage/.htaccess
 .claude/
+.env

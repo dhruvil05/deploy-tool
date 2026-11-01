@@ -11,6 +11,52 @@ namespace DeployTool;
 final class DiffView
 {
     /**
+     * The two versions of a run's file to compare, and what each side is.
+     * kind=change: the server copy before vs. what this run makes it.
+     * kind=server: what we expected on the server vs. what was actually there.
+     *
+     * @return array{0: ?string, 1: ?string, 2: array{0: string, 1: string}} before, after (null = no file), labels
+     */
+    public static function sides(array $run, array $file, string $kind, Git $git): array
+    {
+        $path = $file['path'];
+        if ($run['type'] === 'rollback') {
+            return [
+                $git->fileAt($run['from'], $path),
+                $file['action'] === 'restore' ? Backup::get($run['rollback_of'], $path) : null,
+                ['now (after the deploy)', 'after the rollback'],
+            ];
+        }
+        if ($kind === 'server') {
+            return [
+                $run['from'] !== null ? $git->fileAt($run['from'], $path) : null,
+                Backup::get($run['id'], $path),
+                ['expected (commit ' . short_sha($run['from']) . ')', 'actually on the server'],
+            ];
+        }
+        return [
+            Backup::get($run['id'], $path),
+            $file['action'] === 'upload' ? $git->fileAt($run['to'], $path) : null,
+            ['on the server before', 'after this run'],
+        ];
+    }
+
+    /** git's unified diff of two versions (null = no file). */
+    public static function text(Git $git, ?string $before, ?string $after, int $context = 3): string
+    {
+        $fileA = tempnam(sys_get_temp_dir(), 'dtdiffa');
+        $fileB = tempnam(sys_get_temp_dir(), 'dtdiffb');
+        try {
+            file_put_contents($fileA, $before ?? '');
+            file_put_contents($fileB, $after ?? '');
+            return $git->diffFiles($fileA, $fileB, $context);
+        } finally {
+            @unlink($fileA);
+            @unlink($fileB);
+        }
+    }
+
+    /**
      * @return array{rows: list<array{type: string, old: ?int, new: ?int, html: string, eol?: bool}>, added: int, removed: int, binary: bool}
      *         type is hunk, ctx, add, del or note; html is escaped text
      */

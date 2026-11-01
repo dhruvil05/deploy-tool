@@ -16,6 +16,23 @@ final class Settings
     /** Choices for the default compare method: method => label. */
     public const COMPARE_METHODS = ['fingerprint' => 'Fingerprint file', 'sizes' => 'File sizes over FTP'];
 
+    /** The Settings page's sections, in menu order. */
+    public const TABS = ['general', 'deploys', 'protected', 'programs', 'ai', 'permissions', 'cloud', 'storage'];
+
+    /** The Settings section a form field is in, to open it when that field has a mistake. */
+    public static function tabOf(string $field): string
+    {
+        return match (true) {
+            str_starts_with($field, 'ai_perm_') => 'permissions',
+            str_starts_with($field, 'cloud_') => 'cloud',
+            str_starts_with($field, 'ai_') => 'ai',
+            $field === 'deployer_name' => 'general',
+            in_array($field, ['git_path', 'php_path', 'ssh_path'], true) => 'programs',
+            $field === 'protected_paths' => 'protected',
+            default => 'deploys',
+        };
+    }
+
     public static function defaults(): array
     {
         return [
@@ -47,8 +64,11 @@ final class Settings
         return array_intersect_key(JsonStore::read('settings'), array_flip(['repo_path', 'branch', 'remote', 'extra_protected']));
     }
 
-    /** Validates and saves. Returns [field => error]; nothing is saved when there are errors. */
-    public static function save(array $input): array
+    /**
+     * Validates and saves. Returns [field => error]; nothing is saved when there are errors.
+     * $write false only checks.
+     */
+    public static function save(array $input, bool $write = true): array
     {
         $values = [];
         foreach (array_keys(self::defaults()) as $key) {
@@ -79,7 +99,7 @@ final class Settings
             $errors['ftp_connections'] = 'Enter 1 to ' . FtpTransport::MAX_CONNECTIONS . '.';
         }
 
-        if (!$errors) {
+        if (!$errors && $write) {
             JsonStore::write('settings', $values + self::legacy());
         }
         return $errors;

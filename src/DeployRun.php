@@ -65,6 +65,49 @@ final class DeployRun
         return $run;
     }
 
+    /**
+     * What a deploy to this site would do, read-only (the Deploy page and the assistant):
+     * the commit it would deploy, the server's recorded version, and the commits and files
+     * in between. Problems are reported in sourceError / stateError, never thrown.
+     */
+    public static function preview(array $site): array
+    {
+        $git = Sites::git($site);
+        $data = [
+            'open' => RunStore::activeRunFor($site['key']),
+            'source' => null,
+            'sourceError' => null,
+            'state' => null,
+            'stateError' => null,
+            'commits' => [],
+            'changes' => null,
+        ];
+        try {
+            $data['source'] = $git->commitInfo(self::sourceCommit($site, $git));
+        } catch (\RuntimeException $e) {
+            $data['sourceError'] = $e->getMessage();
+        }
+        try {
+            $data['state'] = ServerState::read(Sites::transport($site));
+        } catch (\RuntimeException $e) {
+            $data['stateError'] = $e->getMessage();
+        }
+        if ($data['source'] !== null && $data['stateError'] === null) {
+            if ($data['state'] === null) {
+                $data['commits'] = $git->recentCommits($data['source']['sha'], 30);
+            } elseif ($git->resolve($data['state']['commit']) !== null) {
+                $commits = $git->recentCommits($data['state']['commit'] . '..' . $data['source']['sha'], 50);
+                $data['changes'] = [
+                    'commits' => count($commits) < 50 ? count($commits) : $git->countBetween($data['state']['commit'], $data['source']['sha']),
+                    'list' => $commits,
+                    'files' => $git->changedFiles($data['state']['commit'], $data['source']['sha']),
+                    'protected' => ProtectedPaths::regexes(Sites::rootSource($site)),
+                ];
+            }
+        }
+        return $data;
+    }
+
     /** The commit a site should get: its local's branch, or what its source site runs. */
     public static function sourceCommit(array $site, Git $git): string
     {
