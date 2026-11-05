@@ -60,6 +60,14 @@ final class Tools
                 'paths' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Only these files. Default: every different and missing file.'],
                 'include_line_endings' => ['type' => 'boolean', 'description' => 'Also upload files that differ only in line endings. Default false.'],
             ], 'required' => ['compare_run_id']]],
+            ['name' => 'set_compare_ticks', 'description' => 'Ticks or unticks files on a finished compare, the same as the user clicking the boxes on its page. It starts nothing: the compare page opens with these ticks, and prepare_match without paths uses them. Use this whenever the user says tick or untick about a compare.', 'parameters' => ['properties' => [
+                'compare_run_id' => ['type' => 'string'],
+                'untick' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Paths to untick.'],
+                'tick' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Paths to tick.'],
+                'untick_lists' => ['type' => 'array', 'items' => ['type' => 'string', 'enum' => ['different', 'missing', 'line_endings']], 'description' => 'Untick every file of these lists.'],
+                'tick_lists' => ['type' => 'array', 'items' => ['type' => 'string', 'enum' => ['different', 'missing', 'line_endings']], 'description' => 'Tick every file of these lists.'],
+                'reset' => ['type' => 'boolean', 'description' => 'Back to the default (different and missing ticked) before the other changes.'],
+            ], 'required' => ['compare_run_id']]],
             ['name' => 'set_review_files', 'description' => 'Changes which files a deploy or match waiting for review will upload or delete: "exclude" leaves files out (they stay as they are on the server), "include" puts left-out files back. Paths as get_run lists them. Only the files in the review can be changed.', 'parameters' => ['properties' => [
                 'run_id' => ['type' => 'string'],
                 'exclude' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Paths to leave out.'],
@@ -88,7 +96,7 @@ final class Tools
             ['name' => 'add_site', 'description' => "Adds a site to this chat's local's pipeline. Never ask for or pass a password: an FTP site is saved without one, and the user adds it on the site's page.", 'parameters' => ['properties' => [
                 'key' => ['type' => 'string', 'description' => 'Short id, 2 to 40 lowercase letters, numbers or dashes, e.g. nova-staging. It can\'t change later.'],
             ] + self::SITE_FIELDS, 'required' => ['key', 'name', 'type']]],
-            ['name' => 'edit_site', 'description' => "Changes some settings of one of this chat's sites; fields not given stay as they are. It can't set a password, unmark production, or change the key.", 'parameters' => ['properties' => [
+            ['name' => 'edit_site', 'description' => "Changes some settings of one of this chat's sites; fields not given stay as they are. It can't set a password, unmark production, or change the key. On an FTP site with a saved password it can't change the type, host, port, username or turn off the certificate check.", 'parameters' => ['properties' => [
                 'site' => $site,
                 'changes' => ['type' => 'object', 'properties' => self::SITE_FIELDS, 'description' => 'Only the fields to change.'],
             ], 'required' => ['site', 'changes']]],
@@ -123,7 +131,7 @@ final class Tools
         'username' => ['type' => 'string', 'description' => 'FTP username.'],
         'root' => ['type' => 'string', 'description' => 'FTP folder holding index.php, from where the login lands. / when it lands there.'],
         'connections' => ['type' => 'integer', 'description' => 'FTP connections at once, 1 to 8.'],
-        'verify_tls' => ['type' => 'boolean', 'description' => "Check the FTP server's certificate (off for IP addresses)."],
+        'verify_tls' => ['type' => 'boolean', 'description' => "Check the FTP server's certificate. On by default; off only for an IP-address host."],
         'ssh_host' => ['type' => 'string'],
         'ssh_port' => ['type' => 'integer'],
         'ssh_user' => ['type' => 'string'],
@@ -140,6 +148,7 @@ final class Tools
         'prepare_deploy' => 'prepare',
         'prepare_match' => 'prepare',
         'set_review_files' => 'review_files',
+        'set_compare_ticks' => 'review_files',
         'approve_run' => 'approve',
         'confirm_sql_done' => 'sql',
         'retry_run' => 'retry',
@@ -198,6 +207,7 @@ final class Tools
                 'prepare_match' => self::prepareMatch(self::text($arguments, 'compare_run_id'), $arguments),
                 'wait_for_run' => self::waitForRun(self::text($arguments, 'run_id'), (int) ($arguments['seconds'] ?? 60)),
                 'set_review_files' => self::setReviewFiles(self::text($arguments, 'run_id'), $arguments),
+                'set_compare_ticks' => self::setCompareTicks(self::text($arguments, 'compare_run_id'), $arguments),
                 'approve_run' => self::approveRun(self::text($arguments, 'run_id'), $arguments),
                 'list_locals_and_sites' => [self::listAll(), null],
                 'local_status' => [self::localStatus(self::text($arguments, 'local')), null],
@@ -274,7 +284,25 @@ final class Tools
     }
 
     /** What the chat shows for an action, e.g. "Read the status of Staging site". */
-    public static function label(string $name, array $arguments): string
+    public static function label(string $name, array $arguments, bool $asking = false): string
+    {
+        $done = self::doneLabel($name, $arguments);
+        if (!$asking) {
+            return $done;
+        }
+        // "Prepared a deploy to X" becomes "Prepare a deploy to X" for the Allow / Deny question.
+        $verbs = ['Left out' => 'Leave out', 'Prepared' => 'Prepare', 'Started' => 'Start', 'Approved' => 'Approve', 'Marked' => 'Mark',
+            'Retried' => 'Retry', 'Recorded' => 'Record', 'Cancelled' => 'Cancel', 'Protected' => 'Protect', 'Added' => 'Add',
+            'Changed' => 'Change', 'Fetched' => 'Fetch', 'Put back' => 'Put back'];
+        foreach ($verbs as $past => $now) {
+            if (str_starts_with($done, $past)) {
+                return $now . substr($done, strlen($past));
+            }
+        }
+        return $done;
+    }
+
+    private static function doneLabel(string $name, array $arguments): string
     {
         $siteName = static fn (): string => Sites::get((string) ($arguments['site'] ?? ''))['name'] ?? (string) ($arguments['site'] ?? '?');
         return match ($name) {
@@ -290,6 +318,7 @@ final class Tools
             'prepare_match' => 'Prepared "Make it match"' . (isset($arguments['paths']) ? ' for ' . count((array) $arguments['paths']) . ' file(s)' : ''),
             'wait_for_run' => 'Waited for run ' . (string) ($arguments['run_id'] ?? '?'),
             'set_review_files' => self::reviewFilesLabel($arguments),
+            'set_compare_ticks' => 'Changed the ticks on compare ' . (string) ($arguments['compare_run_id'] ?? '?'),
             'approve_run' => 'Approved run ' . (string) ($arguments['run_id'] ?? '?'),
             'fetch_local' => 'Fetched from GitHub',
             'confirm_sql_done' => 'Marked the SQL step done',
@@ -333,12 +362,54 @@ final class Tools
         if ($compare['type'] !== 'compare' || $compare['status'] !== 'done' || !empty($compare['recorded'])) {
             throw new \RuntimeException('That run is not a finished compare whose version is still unrecorded.');
         }
-        $paths = isset($arguments['paths']) ? array_values(array_filter((array) $arguments['paths'], 'is_string')) : null;
+        // No paths given: the ticks saved on the compare, else every different and missing file.
+        $paths = isset($arguments['paths']) ? array_values(array_filter((array) $arguments['paths'], 'is_string')) : ($compare['ticks'] ?? null);
         $listed = array_merge($compare['result']['differs'], $compare['result']['missing'], $compare['result']['eol']);
         if ($paths !== null && ($unknown = array_diff($paths, $listed)) !== []) {
             throw new \RuntimeException('Not in this compare\'s different, missing or line-ending lists: ' . implode(', ', array_slice($unknown, 0, 10)) . '. Use get_run for the exact paths.');
         }
         return self::started(CompareRun::createSync($compare, $paths, !empty($arguments['include_line_endings'])));
+    }
+
+    /**
+     * Saves which files are ticked on a compare (as if clicked on its page). Starts nothing.
+     *
+     * @return array{0: array, 1: string}
+     */
+    private static function setCompareTicks(string $id, array $arguments): array
+    {
+        $compare = self::loadRun($id);
+        if ($compare['type'] !== 'compare' || $compare['status'] !== 'done' || !empty($compare['recorded'])) {
+            throw new \RuntimeException('Ticks only apply to a finished compare whose version is not recorded yet.');
+        }
+        $lists = ['different' => $compare['result']['differs'], 'missing' => $compare['result']['missing'], 'line_endings' => $compare['result']['eol']];
+        $all = array_merge(...array_values($lists));
+        $strings = static fn (string $key): array => array_values(array_filter((array) ($arguments[$key] ?? []), 'is_string'));
+        $unknown = array_diff(array_merge($strings('tick'), $strings('untick')), $all);
+        if ($unknown !== []) {
+            throw new \RuntimeException('Not in this compare\'s lists: ' . implode(', ', array_slice($unknown, 0, 10)) . '. Use get_run for the exact paths.');
+        }
+        $ticked = !empty($arguments['reset']) || !isset($compare['ticks']) ? array_merge($lists['different'], $lists['missing']) : $compare['ticks'];
+        foreach ($strings('untick_lists') as $list) {
+            $ticked = array_diff($ticked, $lists[$list] ?? []);
+        }
+        foreach ($strings('tick_lists') as $list) {
+            $ticked = array_merge($ticked, $lists[$list] ?? []);
+        }
+        $ticked = array_values(array_unique(array_diff(array_merge($ticked, $strings('tick')), $strings('untick'))));
+        $compare['ticks'] = $ticked;
+        Runner::log($compare, 'info', 'Ticks set by the AI assistant for ' . (Settings::get('deployer_name') ?: 'the user') . ': ' . count($ticked) . ' file(s) ticked.');
+        RunStore::save($compare);
+        $count = static fn (array $paths): int => count(array_intersect($paths, $ticked));
+        return [
+            [
+                'run_id' => $compare['id'],
+                'ticked' => ['different' => $count($lists['different']) . ' of ' . count($lists['different']), 'missing' => $count($lists['missing']) . ' of ' . count($lists['missing']), 'line_endings' => $count($lists['line_endings']) . ' of ' . count($lists['line_endings'])],
+                'ticked_paths' => array_slice($ticked, 0, 50),
+                'note' => 'Nothing was started. The user can open the compare to check, then prepare the upload there, or ask you to prepare it.',
+            ],
+            'index.php?r=run&id=' . urlencode($compare['id']),
+        ];
     }
 
     /** @return array{0: array, 1: string} */
@@ -585,6 +656,17 @@ final class Tools
         }
         if ($existing === null) {
             $input['key'] = (string) ($fields['key'] ?? '');
+        }
+        // The saved password stays when a site is edited, so a change to where it is sent
+        // (or how safely) could hand it to another server. Only the user does that, on the page.
+        if ($existing !== null && $existing['password'] !== '' && ($input['type'] ?? 'ftp') === 'ftp') {
+            $moved = $existing['type'] !== 'ftp'
+                || strtolower(trim((string) $input['host'])) !== strtolower(trim((string) $existing['host']))
+                || (int) $input['port'] !== (int) $existing['port']
+                || trim((string) $input['username']) !== trim((string) $existing['username']);
+            if ($moved || (!empty($existing['verify_tls']) && empty($input['verify_tls']))) {
+                throw new \RuntimeException("{$existing['name']} has a saved FTP password, so its type, host, port, username and certificate check are changed only on the site's page (index.php?r=site-edit&key={$existing['key']}).");
+            }
         }
 
         [$errors, $site] = Sites::save($input, $existing['key'] ?? null, true);

@@ -26,7 +26,7 @@ final class Sites
         'username' => '',
         'password' => '',
         'root' => '/',
-        'verify_tls' => false,
+        'verify_tls' => true,
         'connections' => 4,
         'ssh_host' => '',
         'ssh_port' => 22,
@@ -46,6 +46,7 @@ final class Sites
             'name' => 'Staging site',
             'source' => 'local',
             'host' => '148.66.159.26',
+            'verify_tls' => false, // an IP address: no certificate can match it
             'url' => 'https://stagingoffice.dvijinfotech.com',
         ] + self::BLANK,
         'prod' => [

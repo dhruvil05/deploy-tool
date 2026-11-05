@@ -21,14 +21,18 @@ foreach ($messages as $message) {
     }
     $last = array_key_last($turns);
     if ($last === null || $turns[$last][0] !== 'bot') {
-        $turns[] = ['bot', ['actions' => [], 'notes' => [], 'text' => '', 'error' => false, 'stopped' => false]];
+        $turns[] = ['bot', ['actions' => [], 'notes' => [], 'text' => '', 'error' => false, 'stopped' => false, 'asking' => [], 'models' => []]];
         $last = array_key_last($turns);
+    }
+    if (!empty($message['model'])) {
+        $turns[$last][1]['models'][] = $message['model'];
     }
     if (!empty($message['calls'])) {
         if (($message['content'] ?? '') !== '') {
             $turns[$last][1]['notes'][] = $message['content'];
         }
         array_push($turns[$last][1]['actions'], ...($message['actions'] ?? []));
+        $turns[$last][1]['asking'] = !empty($message['pending']) ? (array) ($message['asking'] ?? []) : [];
     } else {
         $turns[$last][1]['text'] = $message['content'];
         $turns[$last][1]['error'] = !empty($message['error']);
@@ -83,6 +87,24 @@ $icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="cur
                     <div class="chat-text<?= $turn['stopped'] ? ' is-stopped' : '' ?>"><?= $turn['error'] || $turn['stopped'] ? '<p>' . e($turn['text']) . '</p>' : Markdown::html($turn['text']) ?></div>
                 <?php endif ?>
                 <?= $reviewCard($turn['actions']) ?>
+                <?php if ($turn['asking']): ?>
+                    <div class="chat-ask js-chat-ask">
+                        <p><strong>The assistant wants to:</strong></p>
+                        <ul>
+                            <?php foreach ($turn['asking'] as $what): ?>
+                                <li><?= e($what) ?></li>
+                            <?php endforeach ?>
+                        </ul>
+                        <div class="chat-ask-buttons">
+                            <button type="button" class="primary js-chat-decide" data-decision="allow">Allow</button>
+                            <button type="button" class="js-chat-decide" data-decision="deny">Deny</button>
+                            <span class="meta">Set to "Ask me first" in <a href="index.php?r=settings&amp;tab=permissions">AI permissions</a>.</span>
+                        </div>
+                    </div>
+                <?php endif ?>
+                <?php if ($turn['models']): ?>
+                    <p class="chat-model">Answered by <?= implode(', ', array_map(static fn (string $m): string => '<code>' . e($m) . '</code>', array_values(array_unique($turn['models'])))) ?></p>
+                <?php endif ?>
             </div>
         </div>
     <?php endif ?>

@@ -107,6 +107,13 @@ $error = static fn (string $field): string => isset($errors[$field]) ? '<p class
             </div>
         </div>
 
+        <div class="field ai-instructions<?= $hasError('ai_instructions') ?>">
+            <label for="ai_instructions">Your instructions</label>
+            <textarea id="ai_instructions" name="ai_instructions" rows="6" placeholder="For example:&#10;- When I say untick, only change the ticks. Never start an upload unless I say upload or deploy.&#10;- Always list the files and ask before preparing anything.&#10;- Answer in short bullet points."><?= e($ai['instructions']) ?></textarea>
+            <p class="help">House rules in plain words, added to every chat. They can't unlock anything AI permissions don't allow.</p>
+            <?= $error('ai_instructions') ?>
+        </div>
+
         <p class="meta ai-env-note">To remove the assistant for good, set <code>DEPLOY_TOOL_AI=false</code> in the .env file in the tool's folder (copy .env.example to start one).</p>
     </section>
 <?php endif ?>

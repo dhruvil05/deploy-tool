@@ -143,7 +143,7 @@ $types = [
                     <input type="checkbox" name="verify_tls" value="1" <?= $site['verify_tls'] ? 'checked' : '' ?>>
                     <span>Check the server's certificate</span>
                 </label>
-                <p class="help">Leave this off when the host is an IP address: the certificate can't match it. The connection is encrypted either way.</p>
+                <p class="help">Keep this on: without it, anyone between you and the server could pose as it and read the FTP password. Turn it off only when the host is an IP address, which no certificate can match.</p>
             </div>
 
             <div class="js-type-group type-fields" data-type="ssh" <?= $type === 'ssh' ? '' : 'hidden' ?>>

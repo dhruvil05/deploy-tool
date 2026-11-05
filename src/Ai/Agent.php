@@ -33,16 +33,44 @@ final class Agent
     public function reply(array &$chat, string $text, ?callable $checkpoint = null): void
     {
         $checkpoint ??= static fn (): bool => false;
+        // A question left unanswered (Allow / Deny) counts as "no" once the user writes on.
+        if (self::pendingIndex($chat) !== null) {
+            $this->settle($chat, false, $checkpoint, 'Not run: the user wrote a new message instead of allowing it.');
+        }
         $chat['messages'][] = ['role' => 'user', 'content' => $text, 'at' => time()];
+        $this->work($chat, $checkpoint);
+    }
+
+    /**
+     * The user's answer to the Allow / Deny question: runs (or refuses) the waiting actions,
+     * then lets the assistant carry on from there.
+     */
+    public function resume(array &$chat, bool $allow, ?callable $checkpoint = null): void
+    {
+        $checkpoint ??= static fn (): bool => false;
+        if (self::pendingIndex($chat) === null) {
+            throw new \RuntimeException('Nothing is waiting for your answer in this chat.');
+        }
+        if ($this->settle($chat, $allow, $checkpoint, 'Not run: the user said no.')) {
+            $this->work($chat, $checkpoint);
+        }
+    }
+
+    /** The index of the assistant message whose actions wait for Allow / Deny, or null. */
+    public static function pendingIndex(array $chat): ?int
+    {
+        $last = array_key_last($chat['messages']);
+        return $last !== null && !empty($chat['messages'][$last]['pending']) ? $last : null;
+    }
+
+    /** Asks the model, runs what it picks, and repeats until it answers, asks, or stops. */
+    private function work(array &$chat, callable $checkpoint): void
+    {
         $steps = max(1, (int) $this->settings['max_steps']);
-        $stopped = static function (array &$chat): void {
-            $chat['messages'][] = ['role' => 'assistant', 'content' => 'Stopped, as you asked.', 'stopped' => true, 'at' => time()];
-        };
         if ($checkpoint($chat)) {
-            $stopped($chat);
+            $this->stopped($chat);
             return;
         }
-
         for ($step = 0; $step < $steps; $step++) {
             try {
                 $reply = $this->provider->chat($this->systemPrompt($chat), $this->history($chat), Tools::allowedDefinitions());
@@ -61,32 +89,74 @@ final class Agent
                 if ($reply['stop'] === 'length') {
                     $answer .= "\n\n(My answer was cut off: it reached the length limit.)";
                 }
-                $chat['messages'][] = ['role' => 'assistant', 'content' => $answer, 'at' => time()];
+                $chat['messages'][] = ['role' => 'assistant', 'content' => $answer, 'model' => $reply['model'], 'at' => time()];
                 return;
             }
 
-            // Each action is saved as soon as it is done. Every call gets a result, even after
-            // a stop, because providers refuse a conversation with an unanswered call.
-            $chat['messages'][] = ['role' => 'assistant', 'content' => $reply['text'], 'calls' => $reply['calls'], 'actions' => [], 'at' => time()];
-            $index = array_key_last($chat['messages']);
-            $stop = $checkpoint($chat);
-            foreach ($reply['calls'] as $call) {
-                if ($stop) {
-                    $chat['messages'][] = ['role' => 'tool', 'call_id' => $call['id'], 'name' => $call['name'], 'content' => '{"error":"Not run: the user stopped."}'];
-                    continue;
-                }
-                $outcome = Tools::run($call['name'], $call['arguments'], $chat['local']);
-                $chat['messages'][$index]['actions'][] = ['label' => $outcome['label'], 'ok' => $outcome['ok'], 'link' => $outcome['link'], 'run' => $outcome['run']];
-                $chat['messages'][] = ['role' => 'tool', 'call_id' => $call['id'], 'name' => $call['name'], 'content' => $outcome['result']];
-                $stop = $checkpoint($chat);
+            $chat['messages'][] = ['role' => 'assistant', 'content' => $reply['text'], 'calls' => $reply['calls'], 'actions' => [], 'model' => $reply['model'], 'at' => time()];
+            // An action set to "Ask me first": nothing runs until the user clicks Allow or Deny.
+            $asks = array_filter($reply['calls'], static fn (array $call): bool => isset(Tools::NEEDS[$call['name']]) && Ai::mode(Tools::NEEDS[$call['name']]) === 'ask');
+            if ($asks !== []) {
+                $index = array_key_last($chat['messages']);
+                $chat['messages'][$index]['pending'] = true;
+                $chat['messages'][$index]['asking'] = array_map(static fn (array $call): string => Tools::label($call['name'], $call['arguments'], true), array_values($asks));
+                return;
             }
-            if ($stop) {
-                $stopped($chat);
+            if ($this->runCalls($chat, array_key_last($chat['messages']), null, $checkpoint)) {
+                $this->stopped($chat);
                 return;
             }
         }
 
         $chat['messages'][] = ['role' => 'assistant', 'content' => "I stopped after $steps steps, the most one message may take (change it in Settings). Ask me to go on, or narrow the question.", 'error' => true, 'at' => time()];
+    }
+
+    /**
+     * Answers the waiting question: with Allow every call runs; with Deny the ones that
+     * needed asking are refused and the others still run. Returns whether to carry on.
+     */
+    private function settle(array &$chat, bool $allow, callable $checkpoint, string $refusal): bool
+    {
+        $index = (int) self::pendingIndex($chat);
+        unset($chat['messages'][$index]['pending']);
+        $chat['messages'][$index]['answer'] = $allow ? 'allowed' : 'denied';
+        if ($this->runCalls($chat, $index, $allow ? null : $refusal, $checkpoint)) {
+            $this->stopped($chat);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Runs the calls of the assistant message at $index, saving each result as it comes.
+     * With $refusal, calls that need asking get it as their result instead of running.
+     * Every call gets a result, even after a stop: providers refuse unanswered calls.
+     * Returns true when the user asked to stop.
+     */
+    private function runCalls(array &$chat, int $index, ?string $refusal, callable $checkpoint): bool
+    {
+        $stop = $checkpoint($chat);
+        foreach ($chat['messages'][$index]['calls'] as $call) {
+            $asks = isset(Tools::NEEDS[$call['name']]) && Ai::mode(Tools::NEEDS[$call['name']]) === 'ask';
+            if ($stop || ($refusal !== null && $asks)) {
+                $why = $stop ? 'Not run: the user stopped.' : $refusal;
+                if (!$stop) {
+                    $chat['messages'][$index]['actions'][] = ['label' => Tools::label($call['name'], $call['arguments'], true) . ' · you said no', 'ok' => false, 'link' => null, 'run' => null];
+                }
+                $chat['messages'][] = ['role' => 'tool', 'call_id' => $call['id'], 'name' => $call['name'], 'content' => json_encode(['error' => $why])];
+                continue;
+            }
+            $outcome = Tools::run($call['name'], $call['arguments'], $chat['local']);
+            $chat['messages'][$index]['actions'][] = ['label' => $outcome['label'], 'ok' => $outcome['ok'], 'link' => $outcome['link'], 'run' => $outcome['run']];
+            $chat['messages'][] = ['role' => 'tool', 'call_id' => $call['id'], 'name' => $call['name'], 'content' => $outcome['result']];
+            $stop = $checkpoint($chat);
+        }
+        return $stop;
+    }
+
+    private function stopped(array &$chat): void
+    {
+        $chat['messages'][] = ['role' => 'assistant', 'content' => 'Stopped, as you asked.', 'stopped' => true, 'at' => time()];
     }
 
     /**
@@ -133,7 +203,7 @@ final class Agent
             'fetch' => '"Fetch from GitHub" on the dashboard',
             'compare' => '"Compare" on the site\'s card on the dashboard',
             'prepare' => '"Deploy" on the site\'s card, or "Make it match" on a compare\'s page',
-            'review_files' => 'the review page (by preparing a match with only the files they want)',
+            'review_files' => 'the tick boxes on the compare\'s page',
             'approve' => '"Approve" on the run\'s review page',
             'sql' => '"SQL is done (or not needed)" on the run\'s page',
             'retry' => '"Retry" on the failed run\'s page',
@@ -146,16 +216,19 @@ final class Agent
             'add_site' => '"Add site" on the Sites page',
             'edit_site' => '"Edit" on the site under Sites',
         ];
-        $allowed = $denied = [];
+        $allowed = $asks = $denied = [];
         foreach (Ai::PERMISSIONS as $key => [$label]) {
-            if (($this->settings['perm_' . $key] ?? '0') === '1') {
-                $allowed[] = $label;
-            } else {
-                $denied[] = "$label (they click {$where[$key]})";
-            }
+            match (Ai::mode($key, $this->settings)) {
+                'allow' => $allowed[] = $label,
+                'ask' => $asks[] = $label,
+                default => $denied[] = "$label (they click {$where[$key]})",
+            };
         }
         $permissions = '- Allowed beyond reading: ' . ($allowed ? implode('; ', $allowed) : 'nothing') . '.'
+            . ($asks ? "\n- Allowed after the user clicks Allow: " . implode('; ', $asks) . '. Just call the action when they ask for it; the chat then shows them Allow / Deny buttons and you continue with the result. Don\'t ask for permission in words first.' : '')
             . ($denied ? "\n- Not allowed, so tell the user where to click and that they can allow it in Settings → AI permissions: " . implode('; ', $denied) . '.' : '');
+        $own = trim((string) ($this->settings['instructions'] ?? ''));
+        $ownBlock = $own === '' ? '' : "\n\nThe user's own instructions for you (follow them, unless they conflict with the rules above or ask for something not allowed):\n" . $own;
         return <<<TEXT
             You are the assistant inside "Deploy tool", a web app on this computer that deploys PHP projects from git to servers. You talk with $name. It is $today.
 
@@ -173,9 +246,11 @@ final class Agent
             - Use the actions to look things up. Never guess site keys, commits, file names or numbers; if an action fails, say so plainly.
             - After starting a compare, deploy, match, rollback or retry, use wait_for_run and report what happened. A prepared deploy, match or rollback stops at the review: tell the user it is ready, list its files briefly, and ask whether to go ahead (the chat also shows an "Open review" button).
             - Before preparing anything for a production site, ask the user to confirm in the chat, unless they clearly asked for exactly that. Never do more than the user asked for.
-            - When the user wants files ticked or unticked, use prepare_match's paths before a match is prepared, or set_review_files on a run already waiting for review. Match their names to the exact paths with get_run; if a name fits several files or none, ask.
+            - Do exactly what the user asked, nothing more. "Tick" or "untick" about a compare means set_compare_ticks only: it starts nothing. "Tick" or "untick" about a run waiting for review means set_review_files. Only prepare a match or deploy when the user asks to upload, deploy, prepare or make it match.
+            - Short follow-ups ("that one too", "also X") are about the run or files you just handled. Match file names to exact paths with get_run; if a name fits several files or none, ask. Read typos generously ("intick" is untick).
             - Approve, mark SQL done, retry, roll back, record a version or cancel only when the user's latest message clearly asks for that, for that run. Before approving, show them the files and any warnings; they must accept the warnings. Never do these on your own initiative.
-            - Answer briefly in plain words. Format with Markdown: **bold**, `code` for commits and paths, "- " lists. Use a table when the user asks for one or when comparing several runs or sites side by side, and a short heading only to split a long answer. Link a run as [run](index.php?r=run&id=RUN_ID) when it helps.
+            - After an action, say what changed in one or two lines; don't claim something is done unless an action result shows it.
+            - Answer briefly in plain words. Format with Markdown: **bold**, `code` for commits and paths, "- " lists. Use a table when the user asks for one or when comparing several runs or sites side by side, and a short heading only to split a long answer. Link a run as [run](index.php?r=run&id=RUN_ID) when it helps.$ownBlock
             TEXT;
     }
 }

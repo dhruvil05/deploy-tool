@@ -960,6 +960,31 @@
             return response.json();
         };
         const scrollDown = () => { log.scrollTop = log.scrollHeight; };
+        // The box grows with the message, up to its max-height (then it scrolls).
+        const fit = () => {
+            input.style.height = 'auto';
+            input.style.height = input.scrollHeight + 'px';
+        };
+        input.addEventListener('input', fit);
+        window.addEventListener('resize', fit);
+        fit(); // a long placeholder wraps on a narrow screen
+        // While the assistant works, Stop takes the Send button's place.
+        const tipsToggle = chatForm.querySelector('.js-tips-toggle');
+        const tipsMenu = chatForm.querySelector('.js-tips-menu');
+        const showTips = (open) => {
+            tipsMenu.hidden = !open;
+            tipsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        };
+        const setBusy = (busy) => {
+            chatForm.classList.toggle('is-busy', busy);
+            tipsToggle.disabled = busy;
+            showTips(false);
+            send.disabled = busy;
+            send.hidden = busy;
+            stop.hidden = !busy;
+            stop.disabled = false;
+            stop.querySelector('span').textContent = 'Stop';
+        };
         const bubble = (className, text) => {
             const node = document.createElement('div');
             node.className = className;
@@ -1018,17 +1043,13 @@
                     log.append(box);
                     render('');
                     pollTimer = setTimeout(poll, 800);
-                    stop.hidden = false;
-                    stop.disabled = false;
-                    stop.textContent = 'Stop';
-                    send.disabled = true;
+                    setBusy(true);
                 },
                 finish(html) {
                     finished = true;
                     clearTimeout(pollTimer);
                     render(html);
-                    stop.hidden = true;
-                    send.disabled = false;
+                    setBusy(false);
                 },
                 fail(message) {
                     finished = true;
@@ -1038,8 +1059,7 @@
                     note.className = 'chat-bot is-error';
                     note.textContent = message;
                     box.append(note);
-                    stop.hidden = true;
-                    send.disabled = false;
+                    setBusy(false);
                 },
             };
         })();
@@ -1050,12 +1070,12 @@
 
         stop.addEventListener('click', async () => {
             stop.disabled = true;
-            stop.textContent = 'Stopping…';
+            stop.querySelector('span').textContent = 'Stopping…';
             try {
                 await post('assistant-stop', { chat: chatField.value });
             } catch (error) {
                 stop.disabled = false;
-                stop.textContent = 'Stop';
+                stop.querySelector('span').textContent = 'Stop';
             }
         });
 
@@ -1120,6 +1140,7 @@
             document.querySelector('.js-chat-empty')?.remove();
             bubble('chat-user', text);
             input.value = '';
+            fit();
             send.disabled = true;
             try {
                 if (chatField.value === '') {
@@ -1151,9 +1172,35 @@
             } catch (error) {
                 live.fail(error.message || 'Could not reach the tool. Check that it is still running.');
                 input.value = text;
+                fit();
             } finally {
                 scrollDown();
                 input.focus();
+            }
+        });
+        // Allow / Deny on an action set to "Ask me first": the answer so far is redrawn live
+        // as the assistant carries on.
+        log.addEventListener('click', async (event) => {
+            const decide = event.target.closest('.js-chat-decide');
+            if (!decide || send.disabled) {
+                return;
+            }
+            const turn = decide.closest('.chat-live') || decide.closest('.chat-bot');
+            turn.querySelectorAll('.js-chat-decide').forEach((button) => { button.disabled = true; });
+            turn.remove();
+            live.start();
+            try {
+                const answer = await post('assistant-confirm', { chat: chatField.value, decision: decide.dataset.decision });
+                if (!answer.ok) {
+                    throw new Error(answer.error || 'The assistant could not go on.');
+                }
+                live.finish(answer.html);
+                showUsage(answer.usage);
+                document.querySelector('.js-chat-list').innerHTML = answer.list;
+            } catch (error) {
+                live.fail(error.message || 'Could not reach the tool. Check that it is still running.');
+            } finally {
+                scrollDown();
             }
         });
         input.addEventListener('keydown', (event) => {
@@ -1163,9 +1210,35 @@
             }
         });
         document.querySelectorAll('.js-suggest').forEach((button) => button.addEventListener('click', () => {
+            showTips(false);
             input.value = button.dataset.text;
             chatForm.requestSubmit();
         }));
+        // Suggestions menu in the input bar: opens above it, closes on a pick, Esc or a click
+        // elsewhere. Arrow keys move between the questions.
+        const tipItems = [...tipsMenu.querySelectorAll('button')];
+        tipsToggle.addEventListener('click', () => {
+            showTips(tipsMenu.hidden);
+            if (!tipsMenu.hidden) {
+                tipItems[0].focus();
+            }
+        });
+        document.addEventListener('click', (event) => {
+            if (!tipsMenu.hidden && !event.target.closest('.chat-tips')) {
+                showTips(false);
+            }
+        });
+        tipsMenu.addEventListener('keydown', (event) => {
+            const index = tipItems.indexOf(document.activeElement);
+            if (event.key === 'Escape') {
+                showTips(false);
+                tipsToggle.focus();
+            } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                const step = event.key === 'ArrowDown' ? 1 : -1;
+                tipItems[(index + step + tipItems.length) % tipItems.length].focus();
+            }
+        });
     }
 
     // History filters: apply as soon as a dropdown changes (search applies on Enter).

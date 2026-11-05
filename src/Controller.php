@@ -36,7 +36,7 @@ final class Controller
             'cloud-backup-now' => $this->cloudBackupNow(),
             'cloud-list' => $this->cloudList(),
             'cloud-restore' => $this->cloudRestore(),
-            'assistant', 'assistant-new', 'assistant-send', 'assistant-poll', 'assistant-stop', 'assistant-rename', 'assistant-delete' => (new AssistantController())->handle($route),
+            'assistant', 'assistant-new', 'assistant-send', 'assistant-confirm', 'assistant-poll', 'assistant-stop', 'assistant-rename', 'assistant-delete' => (new AssistantController())->handle($route),
             default => (new RunController())->handle($route),
         };
     }

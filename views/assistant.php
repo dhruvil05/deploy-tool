@@ -48,7 +48,7 @@ $suggestions = ['What changed since the last deploy?', 'Is staging up to date?',
             </form>
         </section>
         <section class="card chat-help">
-            <?php $allowedLabels = array_map(static fn (array $p): string => $p[0], array_filter(Ai::PERMISSIONS, static fn (string $key): bool => ($settings['perm_' . $key] ?? '0') === '1', ARRAY_FILTER_USE_KEY)); ?>
+            <?php $allowedLabels = array_map(static fn (array $p): string => $p[0], array_filter(Ai::PERMISSIONS, static fn (string $key): bool => ($settings['perm_' . $key] ?? '0') !== '0', ARRAY_FILTER_USE_KEY)); ?>
             <p><strong>What it can do now</strong></p>
             <p>Read status, history, compare results and file changes<?= $allowedLabels ? ', and: ' . e(implode(', ', array_map('lcfirst', $allowedLabels))) : '' ?>.</p>
             <p class="chat-lock"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span>It acts only when you ask, never approves on production, and you choose the rest in <a href="index.php?r=settings&amp;tab=permissions">AI permissions</a>.</span></p>
@@ -100,7 +100,12 @@ $suggestions = ['What changed since the last deploy?', 'Is staging up to date?',
             <?php if ($shown === []): ?>
                 <div class="chat-empty js-chat-empty">
                     <p><strong>Ask about your deploys in plain words.</strong></p>
-                    <p class="meta">For example: what changed since the last deploy, whether a site is behind, or what a compare found.</p>
+                    <p class="meta">Try one of these, or type your own question below.</p>
+                    <div class="chat-suggest" role="group" aria-label="Suggestions">
+                        <?php foreach ($suggestions as $suggestion): ?>
+                            <button type="button" class="chat-chip js-suggest" data-text="<?= e($suggestion) ?>"><?= e($suggestion) ?></button>
+                        <?php endforeach ?>
+                    </div>
                 </div>
             <?php else: ?>
                 <?= View::partial('assistant_turns', ['messages' => $shown]) ?>
@@ -110,18 +115,29 @@ $suggestions = ['What changed since the last deploy?', 'Is staging up to date?',
         <form id="chat-form" class="chat-form js-chat-form" method="post" action="index.php?r=assistant-send">
             <input type="hidden" name="_csrf" value="<?= e(Http::csrfToken()) ?>">
             <input type="hidden" name="chat" value="<?= e($chat['id'] ?? '') ?>">
-            <div class="chat-suggest">
-                <?php foreach ($suggestions as $suggestion): ?>
-                    <button type="button" class="js-suggest" data-text="<?= e($suggestion) ?>"><?= e($suggestion) ?></button>
-                <?php endforeach ?>
-            </div>
-            <div class="chat-input">
+            <div class="chat-composer">
                 <label for="chat-message" class="sr-only">Message</label>
-                <textarea id="chat-message" name="message" rows="2" placeholder="Ask about deploys, compares, history or a file's changes… (Enter sends, Shift+Enter adds a line)" required></textarea>
-                <button type="button" class="danger chat-stop js-chat-stop" hidden>Stop</button>
-                <button type="submit" class="primary chat-send" aria-label="Send">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
-                </button>
+                <textarea id="chat-message" name="message" rows="1" placeholder="Ask about deploys, compares, history or a file's changes…" required></textarea>
+                <div class="chat-composer-bar">
+                    <div class="chat-tips">
+                        <button type="button" class="chat-tips-toggle js-tips-toggle" aria-haspopup="menu" aria-expanded="false" aria-controls="chat-tips-menu" title="Suggested questions">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2V17h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2z"></path></svg>
+                            <span>Suggestions</span>
+                        </button>
+                        <div id="chat-tips-menu" class="chat-tips-menu js-tips-menu" role="menu" aria-label="Suggested questions" hidden>
+                            <?php foreach ($suggestions as $suggestion): ?>
+                                <button type="button" class="js-suggest" role="menuitem" data-text="<?= e($suggestion) ?>"><?= e($suggestion) ?></button>
+                            <?php endforeach ?>
+                        </div>
+                    </div>
+                    <button type="button" class="chat-stop js-chat-stop" hidden>
+                        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect width="12" height="12" rx="2" fill="currentColor"></rect></svg>
+                        <span>Stop</span>
+                    </button>
+                    <button type="submit" class="primary chat-send" aria-label="Send" title="Send (Enter). Shift + Enter adds a line.">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>
+                    </button>
+                </div>
             </div>
         </form>
     </section>

@@ -37,13 +37,17 @@ $lists = [
 $hidden = '<input type="hidden" name="_csrf" value="' . e(Http::csrfToken()) . '"><input type="hidden" name="id" value="' . e($run['id']) . '">';
 
 // Files "Make it match" can upload get a checkbox (part of #sync-form): different and
-// missing ones start ticked, line-ending-only ones unticked.
+// missing ones start ticked, line-ending-only ones unticked, unless ticks were saved on
+// the compare (by the assistant: $run['ticks']).
 $pickable = $run['recorded'] ? [] : ['differs' => true, 'missing' => true, 'eol' => false];
-$ticked = count($result['differs']) + count($result['missing']);
+$savedTicks = isset($run['ticks']) && is_array($run['ticks']) ? array_flip($run['ticks']) : null;
+$ticked = $savedTicks !== null
+    ? count(array_intersect(array_merge($result['differs'], $result['missing'], $result['eol']), $run['ticks']))
+    : count($result['differs']) + count($result['missing']);
 
 // The ticked files as a folder tree (RunView::pathTree). A folder's checkbox ticks every
-// file in it; only file checkboxes are sent with the form.
-$renderTree = static function (array $node, string $list, bool $checked, bool $open, string $prefix = '') use (&$renderTree): string {
+// file in it (the script sets its state from the files); only file checkboxes are sent.
+$renderTree = static function (array $node, string $list, bool $checked, bool $open, string $prefix = '') use (&$renderTree, $savedTicks): string {
     $html = '';
     foreach ($node['dirs'] as $name => $child) {
         $folder = $prefix . $name . '/';
@@ -54,7 +58,7 @@ $renderTree = static function (array $node, string $list, bool $checked, bool $o
     }
     foreach ($node['files'] as $name => $path) {
         $html .= '<li class="tree-file"><label class="checkbox">'
-            . '<input type="checkbox" form="sync-form" name="files[]" value="' . e($path) . '" data-list="' . e($list) . '"' . ($checked ? ' checked' : '') . '>'
+            . '<input type="checkbox" form="sync-form" name="files[]" value="' . e($path) . '" data-list="' . e($list) . '"' . (($savedTicks !== null ? isset($savedTicks[$path]) : $checked) ? ' checked' : '') . '>'
             . '<span class="tree-name" title="' . e($path) . '">' . e((string) $name) . '</span></label></li>';
     }
     return $html;
@@ -143,6 +147,9 @@ $renderTree = static function (array $node, string $list, bool $checked, bool $o
         <div class="notice notice-success section">Commit <?= e(short_sha($run['to'])) ?> was recorded as this server's version.</div>
     <?php else: ?>
         <h2 class="section next-head">What next</h2>
+        <?php if ($savedTicks !== null): ?>
+            <div class="notice notice-info">The ticks above were set by the AI assistant (<?= count($run['ticks']) ?> file<?= count($run['ticks']) === 1 ? '' : 's' ?> ticked). Change them here if you like before preparing the upload.</div>
+        <?php endif ?>
         <div class="choice-grid">
             <form method="post" action="index.php?r=compare-sync" class="card" id="sync-form">
                 <?= $hidden ?>

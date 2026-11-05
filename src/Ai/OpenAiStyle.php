@@ -51,7 +51,7 @@ final class OpenAiStyle
         return $out;
     }
 
-    /** @return array{text: string, calls: list<array{id: string, name: string, arguments: array}>, stop: string, usage: array{in: int, out: int, cost: ?float}} */
+    /** @return array{text: string, calls: list<array{id: string, name: string, arguments: array}>, stop: string, model: ?string, usage: array{in: int, out: int, cost: ?float}} */
     public static function reply(array $answer): array
     {
         $choice = (array) ($answer['choices'][0] ?? []);
@@ -74,6 +74,8 @@ final class OpenAiStyle
             'calls' => $calls,
             'stop' => $calls !== [] ? 'tool' : ($finish === 'length' ? 'length' : 'end'),
             // OpenRouter adds the request's price in credits (US dollars) when asked; others don't.
+            // The model that really answered: with a router like openrouter/free it changes.
+            'model' => isset($answer['model']) && is_string($answer['model']) ? $answer['model'] : null,
             'usage' => [
                 'in' => (int) ($answer['usage']['prompt_tokens'] ?? 0),
                 'out' => (int) ($answer['usage']['completion_tokens'] ?? 0),

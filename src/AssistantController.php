@@ -19,6 +19,7 @@ final class AssistantController
             'assistant' => $this->page(),
             'assistant-new' => $this->newChat(),
             'assistant-send' => $this->send(),
+            'assistant-confirm' => $this->confirm(),
             'assistant-poll' => $this->poll(),
             'assistant-stop' => $this->stop(),
             'assistant-rename' => $this->rename(),
@@ -69,6 +70,23 @@ final class AssistantController
         if ($text === '') {
             Http::json(['ok' => false, 'error' => 'Type a message first.'], 422);
         }
+        $this->runAgent(static fn (Agent $agent, array &$chat, callable $checkpoint) => $agent->reply($chat, $text, $checkpoint));
+    }
+
+    /** The Allow / Deny buttons: the assistant goes on with (or without) the actions it asked about. */
+    private function confirm(): void
+    {
+        Http::requirePost();
+        if (!Ai::enabled()) {
+            Http::json(['ok' => false, 'error' => 'The assistant is switched off in Settings.'], 403);
+        }
+        $allow = ($_POST['decision'] ?? '') === 'allow';
+        $this->runAgent(static fn (Agent $agent, array &$chat, callable $checkpoint) => $agent->resume($chat, $allow, $checkpoint));
+    }
+
+    /** Loads the chat, holds its lock, lets $work run the assistant, saves, and answers with the new part. */
+    private function runAgent(callable $work): never
+    {
         $chat = ChatStore::load((string) ($_POST['chat'] ?? '')) ?? Http::json(['ok' => false, 'error' => 'This chat no longer exists. Start a new one.'], 404);
         $lock = ChatStore::lock($chat['id']) ?? Http::json(['ok' => false, 'error' => 'Still answering your last message. Wait for it, or press Stop.'], 409);
         // The model and the actions can take minutes; let other pages load meanwhile.
@@ -76,8 +94,9 @@ final class AssistantController
         set_time_limit(600);
         ChatStore::clearStop($chat['id']);
 
+        $error = null;
         try {
-            Agent::fromSettings()->reply($chat, $text, static function (array $chat): bool {
+            $work(Agent::fromSettings(), $chat, static function (array $chat): bool {
                 try {
                     ChatStore::save($chat);
                 } catch (\RuntimeException) {
@@ -96,10 +115,15 @@ final class AssistantController
                     usleep(200_000);
                 }
             }
+        } catch (\RuntimeException $e) {
+            $error = $e->getMessage();
         } finally {
             ChatStore::clearStop($chat['id']);
             flock($lock, LOCK_UN);
             fclose($lock);
+        }
+        if ($error !== null) {
+            Http::json(['ok' => false, 'error' => $error]);
         }
         Http::json($this->state($chat) + [
             'title' => $chat['title'],

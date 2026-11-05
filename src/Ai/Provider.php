@@ -40,7 +40,7 @@ final class Provider
      *   ['role' => 'tool', 'call_id' => '…', 'name' => '…', 'content' => 'the tool's result as text']
      *
      * @param list<array{name: string, description: string, parameters: array}> $tools parameters is a JSON schema
-     * @return array{text: string, calls: list<array{id: string, name: string, arguments: array}>, stop: string, usage: array{in: int, out: int, cost: ?float}}
+     * @return array{text: string, calls: list<array{id: string, name: string, arguments: array}>, stop: string, model: ?string, usage: array{in: int, out: int, cost: ?float}}
      *         stop is tool (run calls, then ask again), end, or length (cut off by max tokens)
      */
     public function chat(string $system, array $messages, array $tools = [], int $maxTokens = 2048): array

@@ -85,6 +85,12 @@ date?", "what changed since the last deploy?", "compare staging and prepare the 
 - **Costs:** each message is a few requests to the provider. "Steps per message" and
   "Messages kept per chat" in Settings cap that. Ollama or LM Studio on this computer cost
   nothing but need a model that is good at tool calling.
+- **AI permissions** (Settings): each action is **Allow**, **Ask** (the chat shows Allow / Deny
+  buttons and nothing happens until you click) or **Off**.
+- **Your instructions** (Settings → AI assistant): house rules in plain words, added to every
+  chat, e.g. "Never start an upload unless I say upload".
+- Each answer shows the model that wrote it. A router like `openrouter/free` picks a different
+  free model per message; one fixed model that is good at tool calling behaves far better.
 - Chats are kept in `storage/chats/`. Runs the assistant starts say so in their log.
 
 ### Turning it off

@@ -30,7 +30,7 @@ final class Ai
         'fetch' => ['Fetch from GitHub', "Downloads the chat's local's latest commits. Your branches and files don't change.", true, 'safe', false],
         'compare' => ['Start compares', 'Reads a server and compares it with a commit. On FTP sites a small helper file is uploaded and removed again.', true, 'safe', false],
         'prepare' => ['Prepare deploys and "Make it match"', "Runs the checks and backs up the server's files, then stops at the review. Nothing on the server changes.", true, 'safe', false],
-        'review_files' => ['Change the files of a review', 'Leaves files out of a run waiting for review, or puts them back.', true, 'safe', false],
+        'review_files' => ['Tick and untick files', 'Changes the ticks on a compare, or leaves files out of a run waiting for review. Starts nothing.', true, 'safe', false],
         'approve' => ['Approve deploys and matches', 'Uploads a reviewed run once you approve it in the chat, after it showed you the files and any warnings.', false, 'server', true],
         'sql' => ['Mark the SQL step done', 'Finishes a deploy when you say the database changes are done or not needed.', false, 'server', false],
         'retry' => ['Retry failed runs', 'Runs a failed deploy, match or compare again from where it stopped.', false, 'server', true],
@@ -54,6 +54,7 @@ final class Ai
             'model' => '',
             'max_steps' => '8',
             'max_messages' => '40',
+            'instructions' => '',
         ];
         foreach (self::PERMISSIONS as $key => [, , $on]) {
             $defaults['perm_' . $key] = $on ? '1' : '0';
@@ -61,10 +62,20 @@ final class Ai
         return $defaults;
     }
 
-    /** Whether the assistant may do this (a key of PERMISSIONS). */
+    /** Whether the assistant may do this at all (a key of PERMISSIONS), on its own or after asking. */
     public static function can(string $permission): bool
     {
-        return self::settings()['perm_' . $permission] === '1';
+        return self::mode($permission) !== 'off';
+    }
+
+    /** 'allow' (does it), 'ask' (waits for Allow in the chat) or 'off'. Stored as 1, ask, 0. */
+    public static function mode(string $permission, ?array $settings = null): string
+    {
+        return match (($settings ?? self::settings())['perm_' . $permission] ?? '0') {
+            '1' => 'allow',
+            'ask' => 'ask',
+            default => 'off',
+        };
     }
 
     /** False when .env says DEPLOY_TOOL_AI=false (or 0, off, no): then nothing about AI shows or runs. */
@@ -107,8 +118,10 @@ final class Ai
             $values[$key] = trim((string) ($input['ai_' . $key] ?? ''));
         }
         foreach (array_keys(self::defaults()) as $key) {
-            if ($key === 'enabled' || str_starts_with($key, 'perm_')) {
+            if ($key === 'enabled') {
                 $values[$key] = $values[$key] === '1' ? '1' : '0';
+            } elseif (str_starts_with($key, 'perm_')) {
+                $values[$key] = in_array($values[$key], ['1', 'ask'], true) ? $values[$key] : '0';
             }
         }
         $values['base_url'] = rtrim($values['base_url'], '/');
@@ -131,6 +144,10 @@ final class Ai
             if (self::PRESETS[$values['provider']][3] && $values['api_key'] === '') {
                 $errors['ai_api_key'] = 'This provider needs an API key.';
             }
+        }
+        $values['instructions'] = str_replace("\r\n", "\n", (string) ($input['ai_instructions'] ?? ''));
+        if (strlen($values['instructions']) > 4000) {
+            $errors['ai_instructions'] = 'Keep your instructions under 4,000 characters.';
         }
         foreach (['max_steps' => [1, 20], 'max_messages' => [10, 200]] as $key => [$min, $max]) {
             if (!ctype_digit($values[$key]) || (int) $values[$key] < $min || (int) $values[$key] > $max) {

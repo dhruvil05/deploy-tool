@@ -56,7 +56,7 @@ final class AnthropicStyle
         return $blocks;
     }
 
-    /** @return array{text: string, calls: list<array{id: string, name: string, arguments: array}>, stop: string, usage: array{in: int, out: int, cost: ?float}} */
+    /** @return array{text: string, calls: list<array{id: string, name: string, arguments: array}>, stop: string, model: ?string, usage: array{in: int, out: int, cost: ?float}} */
     public static function reply(array $answer): array
     {
         $text = [];
@@ -77,6 +77,7 @@ final class AnthropicStyle
             'text' => trim(implode("\n\n", $text)),
             'calls' => $calls,
             'stop' => $calls !== [] ? 'tool' : ($stop === 'max_tokens' ? 'length' : 'end'),
+            'model' => isset($answer['model']) && is_string($answer['model']) ? $answer['model'] : null,
             'usage' => ['in' => (int) ($answer['usage']['input_tokens'] ?? 0), 'out' => (int) ($answer['usage']['output_tokens'] ?? 0), 'cost' => null],
         ];
     }
