@@ -60,7 +60,7 @@ final class Sites
 
     public static function all(): array
     {
-        $sites = JsonStore::exists('sites') ? JsonStore::read('sites') : self::DEFAULT_SITES;
+        $sites = JsonStore::exists('sites') ? self::stored() : self::DEFAULT_SITES;
         $firstLocal = 'local:' . Sources::firstKey();
         return array_map(static function (array $site) use ($firstLocal): array {
             $site += self::BLANK;
@@ -69,6 +69,22 @@ final class Sites
             }
             return $site;
         }, $sites);
+    }
+
+    /** sites.json with the FTP passwords unlocked; plain passwords saved before are sealed now. */
+    private static function stored(): array
+    {
+        $sites = JsonStore::read('sites');
+        if (array_filter($sites, static fn (array $site): bool => Secrets::needsSealing($site, ['password']))) {
+            self::write($sites);
+        }
+        return array_map(static fn (array $site): array => Secrets::openFields($site, ['password']), $sites);
+    }
+
+    /** Saves sites.json with the FTP passwords sealed. */
+    private static function write(array $sites): void
+    {
+        JsonStore::write('sites', array_map(static fn (array $site): array => Secrets::sealFields($site, ['password']), $sites));
     }
 
     public static function isSaved(): bool
@@ -88,6 +104,9 @@ final class Sites
 
     public static function transport(array $site): Transport
     {
+        if ($site['type'] === 'ftp' && Secrets::isSealed($site['password'])) {
+            throw new \RuntimeException("The saved FTP password of {$site['name']} can't be unlocked on this computer (its key file is missing or different). Type the password again on the site's page.");
+        }
         return match ($site['type']) {
             'folder' => new FolderTransport($site['path']),
             'ssh' => new SshTransport($site),
@@ -356,7 +375,7 @@ final class Sites
             return "{$sites[$key]['name']} has an open run. Finish or cancel it first.";
         }
         $sites[$key]['source'] = $source;
-        JsonStore::write('sites', $sites);
+        self::write($sites);
         return null;
     }
 
@@ -365,7 +384,7 @@ final class Sites
         $sites = self::all();
         if (isset($sites[$key])) {
             $sites[$key]['hidden'] = $hidden;
-            JsonStore::write('sites', $sites);
+            self::write($sites);
         }
     }
 
@@ -433,7 +452,7 @@ final class Sites
                 $errors['path'] = 'This folder is inside the repository this site gets its code from. Deploying here would overwrite your working files. Use a separate copy.';
             }
         } elseif ($site['type'] === 'ssh') {
-            if (!preg_match('/^[a-z0-9.-]+$/i', $site['ssh_host'])) {
+            if (!preg_match('/^[a-z0-9][a-z0-9.-]*$/i', $site['ssh_host'])) {
                 $errors['ssh_host'] = 'Enter the SSH host name or IP address.';
             }
             if ($site['ssh_port'] < 1 || $site['ssh_port'] > 65535) {
@@ -452,7 +471,7 @@ final class Sites
                 $errors['ssh_php'] = 'Enter a command without spaces, for example php or /usr/local/bin/php.';
             }
         } else {
-            if (!preg_match('/^[a-z0-9.-]+$/i', $site['host'])) {
+            if (!preg_match('/^[a-z0-9][a-z0-9.-]*$/i', $site['host'])) {
                 $errors['host'] = 'Enter the FTP host name or IP address.';
             }
             if ($site['connections'] < 1 || $site['connections'] > FtpTransport::MAX_CONNECTIONS) {
@@ -483,7 +502,7 @@ final class Sites
 
         if (!$errors) {
             $sites[$site['key']] = $site;
-            JsonStore::write('sites', $sites);
+            self::write($sites);
         }
         return [$errors, $site];
     }
@@ -501,7 +520,7 @@ final class Sites
             return 'This site has an open run. Finish or cancel it first.';
         }
         unset($sites[$key]);
-        JsonStore::write('sites', $sites);
+        self::write($sites);
         return null;
     }
 

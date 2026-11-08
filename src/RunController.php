@@ -291,17 +291,17 @@ final class RunController
         header('Content-Disposition: attachment; filename="' . $run['id'] . '.csv"');
         $out = fopen('php://output', 'w');
         if ($run['type'] === 'compare') {
-            fputcsv($out, ['result', 'path']);
+            self::csv($out, ['result', 'path']);
             $labels = ['differs' => 'different', 'eol' => 'line endings only', 'missing' => 'missing on server', 'extra' => 'extra on server'];
             foreach ($labels as $key => $label) {
                 foreach ($run['result'][$key] ?? [] as $path) {
-                    fputcsv($out, [$label, $path]);
+                    self::csv($out, [$label, $path]);
                 }
             }
         } else {
-            fputcsv($out, ['action', 'change', 'path', 'server copy before', 'backup kept', 'done']);
+            self::csv($out, ['action', 'change', 'path', 'server copy before', 'backup kept', 'done']);
             foreach ($run['files'] as $file) {
-                fputcsv($out, [
+                self::csv($out, [
                     $file['action'],
                     $file['change'],
                     $file['path'],
@@ -311,7 +311,7 @@ final class RunController
                 ]);
             }
             foreach ($run['skipped'] as $file) {
-                fputcsv($out, ['skipped (protected)', $file['change'], $file['path'], '', '', '']);
+                self::csv($out, ['skipped (protected)', $file['change'], $file['path'], '', '', '']);
             }
         }
         exit;
@@ -375,9 +375,9 @@ final class RunController
         header('Content-Type: text/csv; charset=utf-8');
         header('Content-Disposition: attachment; filename="deploy-history-' . date('Ymd') . '.csv"');
         $out = fopen('php://output', 'w');
-        fputcsv($out, ['started', 'finished', 'type', 'site', 'local', 'from', 'to', 'files', 'status', 'by', 'run']);
+        self::csv($out, ['started', 'finished', 'type', 'site', 'local', 'from', 'to', 'files', 'status', 'by', 'run']);
         foreach ($runs as $run) {
-            fputcsv($out, [
+            self::csv($out, [
                 date('Y-m-d H:i:s', $run['created_at']),
                 isset($run['finished_at']) ? date('Y-m-d H:i:s', $run['finished_at']) : '',
                 RunView::TYPES[$run['type']] ?? $run['type'],
@@ -410,6 +410,17 @@ final class RunController
         header('Content-Length: ' . filesize($zip));
         readfile($zip);
         exit;
+    }
+
+    /**
+     * One CSV row. A cell starting with = + - @ or a tab or line break would run as a formula
+     * in Excel; paths come from servers, so such cells get a ' in front.
+     *
+     * @param resource $out
+     */
+    private static function csv($out, array $cells): void
+    {
+        fputcsv($out, array_map(static fn ($cell): string => preg_match('/^[=+\-@\t\r]/', (string) $cell) ? "'" . $cell : (string) $cell, $cells));
     }
 
     private function site(string $key): array

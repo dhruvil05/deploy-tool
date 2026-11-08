@@ -34,12 +34,20 @@ $source = $local['source'];
             <?php endif ?>
         <?php endif ?>
 
-        <?php foreach ($local['malware'] as $finding): ?>
-            <div class="alert">Malware marker in your <?= e($source['branch']) ?>: <?= e($finding) ?>. Don't deploy.</div>
-        <?php endforeach ?>
-        <?php foreach ($local['remote_malware'] as $finding): ?>
-            <div class="alert">Malware marker on GitHub's <?= e($source['branch']) ?>: <?= e($finding) ?>. Don't pull it.</div>
-        <?php endforeach ?>
+        <?php if ($local['malware']): ?>
+            <div class="alert malware-alert">
+                <strong>Malware in your <?= e($source['branch']) ?> (<?= e(short_sha($local['commit']['sha'])) ?>). Don't deploy, build or run npm in this folder.</strong>
+                <ul><?php foreach ($local['malware'] as $finding): ?><li><?= e($finding) ?></li><?php endforeach ?></ul>
+                <span>Deploys of this commit are blocked. Go back to a clean commit (git log shows the last one without these files changed).</span>
+            </div>
+        <?php endif ?>
+        <?php if ($local['remote_malware']): ?>
+            <div class="alert malware-alert">
+                <strong>Malware on GitHub's <?= e($source['branch']) ?> (<?= e(short_sha($local['remote_commit'])) ?>). Don't pull, merge or build from it.</strong>
+                <ul><?php foreach ($local['remote_malware'] as $finding): ?><li><?= e($finding) ?></li><?php endforeach ?></ul>
+                <span>Someone pushed this to GitHub. <?= $local['malware'] ? '' : 'Your own copy is clean. ' ?>Check who pushed it (GitHub → the repository's activity), change the passwords and tokens with access, then push your clean copy back. Deploys stay blocked until GitHub and your copy agree.</span>
+            </div>
+        <?php endif ?>
 
         <?php if ($local['warnings']): ?>
             <ul class="warnings">

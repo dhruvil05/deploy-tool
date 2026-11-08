@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DeployTool\Ai;
 
 use DeployTool\Ai;
+use DeployTool\Secrets;
 
 /**
  * Talks to the AI provider set in Settings: any OpenAI-style API (OpenRouter, OpenAI,
@@ -90,6 +91,9 @@ final class Provider
     {
         $headers = ['Accept: application/json', 'Content-Type: application/json'];
         $key = $this->settings['api_key'];
+        if (Secrets::isSealed($key)) {
+            throw new \RuntimeException("The saved API key can't be unlocked on this computer (the key file is missing or different). Type it again in Settings → AI assistant.");
+        }
         if (Ai::apiStyle($this->settings) === 'anthropic') {
             $headers[] = 'anthropic-version: 2023-06-01';
             if ($key !== '') {

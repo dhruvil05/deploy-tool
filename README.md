@@ -10,17 +10,44 @@ It runs only on this computer. It is never uploaded to staging or prod.
 Either double-click `start.bat` (or run it from a terminal) and open http://127.0.0.1:8090.
 
 Or, with Laragon's Apache running, open http://localhost/deploy-tool/.
-`.htaccess` limits Apache to this computer (`Require local`).
+`.htaccess` limits Apache to this computer (`Require local`) and to the app's own files.
 
 ## Security
 
-- Only requests from this computer are accepted, and only for known host names.
-- Every change (saving, fetching) needs the page's CSRF token, so other websites open in
-  the same browser can't trigger anything.
-- FTP logins are stored in `storage/sites.json`, and the AI provider's key in `storage/ai.json`.
-  That folder is git-ignored and blocked from the web. Passwords and keys are never shown back
-  on the page.
-- Files are always taken from git commits, never from the working folder.
+This tool can deploy to production with saved passwords, so it guards itself:
+
+- **Safest way to run it:** `start.bat`. PHP's server then listens on 127.0.0.1 only and
+  `router.php` serves nothing but `index.php` and `assets/`. Run with Apache only if you need to.
+- **Only this computer:** requests from other machines and unknown host names (DNS rebinding)
+  are refused by the app itself, whatever the web server allows.
+- **Web server check:** `.htaccess` serves only `index.php` and `assets/` (core Apache rules,
+  no `mod_rewrite` needed). Servers that ignore `.htaccess` (Apache with `AllowOverride None`,
+  Nginx, IIS) are caught too: once a day the tool asks its own web server for a random file in
+  its data folder, and if it gets it, every page shows **"Your passwords may be public."** Then
+  move the data folder out of the web folder in Settings → Storage. Started with `php -S`
+  without `router.php`, it warns the same way.
+- **Password (optional):** Settings → Security. Without one, anyone who can use this computer
+  (other Windows users, programs running on it) can open the tool. Kept as a hash in
+  `auth.json`; 8 idle hours sign you out; wrong tries lock it for a while. Forgot it? Delete
+  `auth.json` in the data folder.
+- **Saved passwords are encrypted:** FTP passwords, the AI key and the cloud keys are encrypted
+  (AES-256-GCM) with a key kept outside the data folder: `%APPDATA%\DeployTool\secret.key`
+  on Windows, `~/.config/deploy-tool/secret.key` elsewhere, or the file `DEPLOY_TOOL_KEY_FILE`
+  names in `.env`. A cloud backup carries this key, encrypted with your passphrase.
+- **CSRF:** every change needs the page's token, so other websites in the same browser can't
+  trigger anything. Passwords and keys are never shown back on a page.
+- **Servers are checked:** FTPS checks the certificate (off only for IP-address hosts); SSH only
+  connects to servers whose key you trusted on the site's page; the fingerprint helper and the
+  site check verify HTTPS certificates.
+- **Deploys:** files always come from git commits, never from the working folder; production
+  needs the typed site key and never deletes files.
+- **AI assistant:** it only acts on the chat's own local, asks or refuses per Settings → AI
+  permissions, never sees passwords, can't move a site with a saved password to another server,
+  add folder sites or point a local at another repository, and treats file contents and server
+  answers as data, not instructions. Approving production in the chat always shows a card where
+  you type the site key yourself; the key goes straight to the approval, never through the model.
+  Code it reads is sent to the AI provider you picked.
+- **Exports:** CSV cells that would run as Excel formulas are escaped.
 
 ## What each server remembers
 
@@ -46,7 +73,9 @@ and `storage/worker.log` says why.
 - **SSH sites** (fastest): the tool copies a small helper to `~/.deploy-tool/` on the server
   (outside the web folder) and sends hundreds of files per SSH connection. Each file is written
   to a temp name, then renamed to its own path. A compare is one call. It needs a key login with
-  no passphrase (cPanel → SSH Access → Manage SSH Keys) and PHP on the server.
+  no passphrase (cPanel → SSH Access → Manage SSH Keys) and PHP on the server. Before the
+  first connection, trust the server's key under **Server key** on the site's page, after
+  comparing its fingerprint with the one your host shows.
 - **FTP sites**: files go over several connections at once ("Connections at once", default 4).
   A file that fails there is tried again on its own.
 - **Compare** uses the fingerprint file by default. "File sizes over FTP" is still there for when
@@ -75,9 +104,11 @@ date?", "what changed since the last deploy?", "compare staging and prepare the 
 - **What it can do:** read locals, sites, history, runs, compare results, deploy previews and
   file changes; start compares; prepare deploys and "Make it match" uploads. A prepared run
   stops at the review and the chat shows an **Open review** button.
-- **What it can't do:** approve, roll back, record a version, cancel runs or change settings.
-  Approving stays with you, and production still needs the typed site key. It asks before
-  preparing anything for a production site.
+- **What it may do is up to you:** approving, rolling back, recording a version and the rest are
+  off until you allow them in AI permissions, and it never changes settings. Approving a
+  production deploy shows a card in the chat where you type the site key yourself (every time,
+  even when Approve is set to Allow); then it carries on. It asks before preparing anything
+  for a production site.
 - **Set it up** in Settings → AI assistant: pick a provider (OpenRouter, OpenAI, Anthropic,
   Groq, Ollama, LM Studio, or Custom for any OpenAI-style API), the API key, and a model
   (**Load models** lists them). **Test** checks the connection and that the model can call

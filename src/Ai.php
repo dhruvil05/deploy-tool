@@ -31,17 +31,17 @@ final class Ai
         'compare' => ['Start compares', 'Reads a server and compares it with a commit. On FTP sites a small helper file is uploaded and removed again.', true, 'safe', false],
         'prepare' => ['Prepare deploys and "Make it match"', "Runs the checks and backs up the server's files, then stops at the review. Nothing on the server changes.", true, 'safe', false],
         'review_files' => ['Tick and untick files', 'Changes the ticks on a compare, or leaves files out of a run waiting for review. Starts nothing.', true, 'safe', false],
-        'approve' => ['Approve deploys and matches', 'Uploads a reviewed run once you approve it in the chat, after it showed you the files and any warnings.', false, 'server', true],
+        'approve' => ['Approve deploys and matches', 'Uploads a reviewed run once you approve it in the chat, after it showed you the files and any warnings. On production the chat shows a card where you type the site key yourself, every time.', false, 'server', false],
         'sql' => ['Mark the SQL step done', 'Finishes a deploy when you say the database changes are done or not needed.', false, 'server', false],
         'retry' => ['Retry failed runs', 'Runs a failed deploy, match or compare again from where it stopped.', false, 'server', true],
         'rollback' => ['Roll back deploys', 'Prepares a rollback for review. With "Approve" also on, it approves it when you say so.', false, 'server', true],
         'record' => ['Record a version', "Writes a compare's commit as the server's version, accepting the differences it found.", false, 'server', true],
         'cancel' => ['Cancel runs', 'Cancels a run waiting for review, or one that failed before changing anything.', false, 'housekeeping', false],
         'protect' => ['Add protected paths', "Adds paths to the chat's local, so they are never touched on its sites.", false, 'housekeeping', false],
-        'add_local' => ['Add locals', 'Adds a git repository on this computer as a new local. Its files are only read, never changed.', false, 'setup', false],
-        'edit_local' => ["Edit the chat's local", 'Changes its name, repository folder, branch or remote. Its protected paths have their own switch.', false, 'setup', false],
-        'add_site' => ['Add sites', "Adds a site to the chat's local's pipeline. Passwords are never typed in the chat: you add them on the site's page.", false, 'setup', false],
-        'edit_site' => ["Edit the chat's sites", 'Changes details such as the address, login name, folder or where a site gets its code from. It can mark a site as production but never unmark one, and never sees or sets passwords.', false, 'setup', false],
+        'add_local' => ['Add locals', 'Adds a git repository from a folder beside your existing locals as a new local. Its files are only read, never changed.', false, 'setup', false],
+        'edit_local' => ["Edit the chat's local", 'Changes its name, branch or remote. Its repository folder and protected paths are changed by you.', false, 'setup', false],
+        'add_site' => ['Add sites', "Adds an FTP or SSH site to the chat's local's pipeline. Passwords are never typed in the chat: you add them on the site's page. Folder sites are yours to add.", false, 'setup', false],
+        'edit_site' => ["Edit the chat's sites", 'Changes details such as the address, login name, folder or where a site gets its code from. It can mark a site as production but never unmark one, never sees or sets passwords, and never moves a site that has a saved password to another server.', false, 'setup', false],
     ];
 
     public static function defaults(): array
@@ -92,6 +92,10 @@ final class Ai
     public static function settings(): array
     {
         $stored = JsonStore::read('ai');
+        if (Secrets::needsSealing($stored, ['api_key'])) {
+            JsonStore::write('ai', Secrets::sealFields($stored, ['api_key']));
+        }
+        $stored = Secrets::openFields($stored, ['api_key']);
         // Before permissions had their own section, approving was one tick: allow_approve.
         if (isset($stored['allow_approve']) && !isset($stored['perm_approve'])) {
             $stored['perm_approve'] = $stored['allow_approve'];
@@ -125,7 +129,9 @@ final class Ai
             }
         }
         $values['base_url'] = rtrim($values['base_url'], '/');
-        if ($values['api_key'] === '') {
+        // A blank key keeps the saved one, but only for the saved address: Test and Load models
+        // must never send the saved key to an address just typed in.
+        if ($values['api_key'] === '' && $values['base_url'] === rtrim($saved['base_url'], '/')) {
             $values['api_key'] = $saved['api_key'];
         }
 
@@ -142,7 +148,9 @@ final class Ai
                 $errors['ai_model'] = 'Pick a model before switching the assistant on.';
             }
             if (self::PRESETS[$values['provider']][3] && $values['api_key'] === '') {
-                $errors['ai_api_key'] = 'This provider needs an API key.';
+                $errors['ai_api_key'] = $saved['api_key'] !== '' && $values['base_url'] !== rtrim($saved['base_url'], '/')
+                    ? 'The address changed, so type the API key again: the saved key is only ever sent to the saved address.'
+                    : 'This provider needs an API key.';
             }
         }
         $values['instructions'] = str_replace("\r\n", "\n", (string) ($input['ai_instructions'] ?? ''));
@@ -159,6 +167,6 @@ final class Ai
 
     public static function save(array $values): void
     {
-        JsonStore::write('ai', array_intersect_key($values, self::defaults()));
+        JsonStore::write('ai', Secrets::sealFields(array_intersect_key($values, self::defaults()), ['api_key']));
     }
 }

@@ -83,6 +83,24 @@ final class StorageLocation
         if (self::inside($app, $full)) {
             return 'That folder holds the tool itself. Choose one beside it or elsewhere.';
         }
+        // A web folder could hand the passwords out to anyone who reaches the server.
+        $root = (string) ($_SERVER['DOCUMENT_ROOT'] ?? '');
+        $webNames = ['www', 'htdocs', 'public_html', 'wwwroot'];
+        if (($root !== '' && PHP_SAPI !== 'cli-server' && self::inside($full, $root))
+            || array_intersect(array_map('strtolower', preg_split('#[\\\\/]+#', $full) ?: []), $webNames) !== []) {
+            return 'That looks like a web folder (' . implode(', ', $webNames) . ' or the web server\'s own folder), where the passwords could be downloaded. Choose a folder outside it.';
+        }
+        return null;
+    }
+
+    /** A note for a folder that works but syncs to the cloud as plain files, or null. */
+    public static function warning(string $path): ?string
+    {
+        foreach (['OneDrive', 'Dropbox', 'Google Drive', 'iCloudDrive', 'iCloud Drive'] as $service) {
+            if (stripos($path, $service) !== false) {
+                return "That folder is synced by $service, so the tool's data (encrypted passwords included) is copied there too. The encrypted cloud backup in Settings is the safer way to keep a copy.";
+            }
+        }
         return null;
     }
 

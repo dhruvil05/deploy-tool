@@ -555,6 +555,133 @@
         });
     });
 
+    // Compare result: Stacked or Side by side (the lists as columns, picked with chips), and a
+    // filter over every list's paths. Both work on the same lists, so the ticks never change.
+    // The layout and the hidden lists are remembered in this browser.
+    const resultLists = document.querySelector('.js-result-lists');
+    if (resultLists) {
+        const sections = [...resultLists.querySelectorAll('.result-section')];
+        const viewButtons = [...document.querySelectorAll('.js-result-view')];
+        const pick = document.querySelector('.js-result-pick');
+        const chips = [...document.querySelectorAll('.js-result-chip')];
+        const isColumns = () => resultLists.classList.contains('is-columns');
+        const pressed = (button) => button.getAttribute('aria-pressed') === 'true';
+        const press = (button, on) => button.setAttribute('aria-pressed', on ? 'true' : 'false');
+        const shownLists = () => chips.filter(pressed).map((chip) => chip.dataset.list);
+        const stored = (() => {
+            try {
+                return JSON.parse(localStorage.getItem('dt-compare-view') || '{}') || {};
+            } catch (error) {
+                return {};
+            }
+        })();
+        const save = () => {
+            try {
+                localStorage.setItem('dt-compare-view', JSON.stringify({
+                    view: isColumns() ? 'columns' : 'stacked',
+                    hide: chips.filter((chip) => !pressed(chip)).map((chip) => chip.dataset.list),
+                }));
+            } catch (error) {
+                // a private window: the choice lasts until the page is left
+            }
+        };
+        const applyChips = () => {
+            const shown = shownLists();
+            sections.forEach((section) => { section.hidden = isColumns() && !shown.includes(section.dataset.list); });
+        };
+        let wasOpen = null;
+        const setView = (view) => {
+            const columns = view === 'columns';
+            if (columns === isColumns()) {
+                return;
+            }
+            resultLists.classList.toggle('is-columns', columns);
+            viewButtons.forEach((button) => press(button, button.dataset.view === view));
+            pick.hidden = !columns;
+            if (columns) {
+                wasOpen = sections.map((section) => section.open);
+                sections.forEach((section) => { section.open = true; });
+            } else if (wasOpen) {
+                sections.forEach((section, i) => { section.open = wasOpen[i]; });
+            }
+            applyChips();
+        };
+        // Side by side keeps every list open: a column's header doesn't fold it.
+        sections.forEach((section) => section.querySelector('summary').addEventListener('click', (event) => {
+            if (isColumns()) {
+                event.preventDefault();
+            }
+        }));
+        viewButtons.forEach((button) => button.addEventListener('click', () => {
+            setView(button.dataset.view);
+            save();
+        }));
+        chips.forEach((chip) => chip.addEventListener('click', () => {
+            if (pressed(chip) && shownLists().length === 1) {
+                return; // at least one list stays
+            }
+            press(chip, !pressed(chip));
+            applyChips();
+            save();
+        }));
+        // A number tile brings its list back in Side by side too.
+        document.querySelectorAll('.js-open-section').forEach((link) => link.addEventListener('click', () => {
+            const chip = chips.find((candidate) => '#' + candidate.dataset.list === link.getAttribute('href'));
+            if (chip && isColumns() && !pressed(chip)) {
+                press(chip, true);
+                applyChips();
+                save();
+            }
+        }));
+        (stored.hide || []).forEach((list) => {
+            const chip = chips.find((candidate) => candidate.dataset.list === list);
+            if (chip) {
+                press(chip, false);
+            }
+        });
+        if (chips.length && shownLists().length === 0) {
+            chips.forEach((chip) => press(chip, true));
+        }
+        if (stored.view === 'columns' && viewButtons.length) {
+            setView('columns');
+        }
+
+        // The filter hides paths that don't contain the text, in every list at once, and says
+        // how many each list still shows. Hidden files keep their ticks.
+        const filter = document.querySelector('.js-result-filter');
+        filter?.addEventListener('input', () => {
+            const query = filter.value.trim().toLowerCase();
+            const matches = (text) => query === '' || text.toLowerCase().includes(query);
+            sections.forEach((section) => {
+                let shown = 0;
+                const files = [...section.querySelectorAll('.tree-file')];
+                files.forEach((item) => {
+                    item.hidden = !matches(item.querySelector('input[name="files[]"]').value);
+                    shown += item.hidden ? 0 : 1;
+                });
+                [...section.querySelectorAll('.tree-dir')].reverse().forEach((dir) => {
+                    const any = dir.querySelector('.tree-file:not([hidden])') !== null;
+                    dir.parentElement.hidden = !any;
+                    if (query !== '' && any) {
+                        dir.open = true;
+                    }
+                });
+                section.querySelectorAll('.extra-groups li').forEach((item) => { item.hidden = !matches(item.querySelector('code').textContent); });
+                section.querySelectorAll('.path-list li').forEach((item) => {
+                    item.hidden = !matches(item.textContent);
+                    shown += files.length === 0 && !item.hidden ? 1 : 0;
+                });
+                const badge = section.querySelector('.js-result-shown');
+                badge.hidden = query === '';
+                badge.textContent = `${shown} shown`;
+                section.querySelector('.js-result-none').hidden = query === '' || shown > 0;
+                if (query !== '' && shown > 0) {
+                    section.open = true;
+                }
+            });
+        });
+    }
+
     // Compare start: quick picks and the recent-commit list fill the commit field.
     document.querySelectorAll('.js-fill-input').forEach((button) => {
         button.addEventListener('click', () => {
@@ -866,6 +993,74 @@
         });
     }
 
+    // Site page → Server key: looks up the SSH server's key and shows its fingerprint, with
+    // Trust for one not trusted yet (the server is asked again when trusting).
+    const hostKeyScan = document.querySelector('.js-hostkey-scan');
+    if (hostKeyScan) {
+        const result = document.querySelector('.js-hostkey-result');
+        const trustForm = document.getElementById('ssh-trust-form');
+        hostKeyScan.addEventListener('click', async () => {
+            const label = hostKeyScan.textContent;
+            hostKeyScan.disabled = true;
+            hostKeyScan.textContent = hostKeyScan.dataset.busy;
+            result.replaceChildren();
+            let answer;
+            try {
+                const response = await fetch('index.php?r=ssh-hostkey&site=' + encodeURIComponent(hostKeyScan.dataset.site), { headers: { Accept: 'application/json', 'X-CSRF-Token': token } });
+                answer = await response.json();
+            } catch (error) {
+                answer = { ok: false, error: 'Could not reach the tool. Check that it is still running.' };
+            } finally {
+                hostKeyScan.disabled = false;
+                hostKeyScan.textContent = label;
+            }
+            if (!answer.ok) {
+                const item = document.createElement('li');
+                item.className = 'error-text';
+                item.textContent = answer.error;
+                result.append(item);
+                return;
+            }
+            result.append(...answer.keys.map((key) => {
+                const item = document.createElement('li');
+                const code = document.createElement('code');
+                code.textContent = key.fingerprint;
+                const type = document.createElement('span');
+                type.className = 'meta';
+                type.textContent = key.type;
+                if (key.trusted) {
+                    const badge = document.createElement('span');
+                    badge.className = 'badge badge-success';
+                    badge.textContent = 'Trusted';
+                    item.append(badge, ' ', code, ' ', type);
+                    return item;
+                }
+                const trust = document.createElement('button');
+                trust.type = 'button';
+                trust.className = 'small primary';
+                trust.textContent = 'Trust this key';
+                trust.addEventListener('click', () => {
+                    if (window.confirm(`Trust ${key.fingerprint}?\n\nOnly if it matches the fingerprint your host shows. The tool will refuse any other key from this server.`)) {
+                        trustForm.querySelector('.js-hostkey-fingerprint').value = key.fingerprint;
+                        trustForm.submit();
+                    }
+                });
+                item.append(code, ' ', type, ' ', trust);
+                return item;
+            }));
+        });
+    }
+
+    // Settings → AI permissions: the Allow / Ask / Off counts follow the choices.
+    const permSummary = document.querySelector('.js-perm-summary');
+    if (permSummary) {
+        const pane = permSummary.closest('.settings-card');
+        const recount = () => permSummary.querySelectorAll('.js-perm-count').forEach((count) => {
+            count.textContent = pane.querySelectorAll(`.perm-modes input[data-mode="${count.dataset.mode}"]:checked`).length;
+        });
+        pane.addEventListener('change', recount);
+    }
+
     // Assistant chat list: a delete button on each chat, and Select mode for deleting
     // several. Works on the list as it is re-drawn after answers and renames.
     const chatListCard = document.querySelector('.js-chat-list-card');
@@ -1061,6 +1256,13 @@
                     box.append(note);
                     setBusy(false);
                 },
+                /** Nothing happened after all (a typo on an approval card): remove the progress. */
+                cancel() {
+                    finished = true;
+                    clearTimeout(pollTimer);
+                    box.remove();
+                    setBusy(false);
+                },
             };
         })();
         scrollDown();
@@ -1091,7 +1293,8 @@
         };
         const saveRename = async () => {
             const name = titleInput.value.trim();
-            if (titleInput.hidden) {
+            // Enter saves, and disabling the box then fires blur: save only once.
+            if (titleInput.hidden || titleInput.disabled) {
                 return;
             }
             if (name === '' || name === title.textContent) {
@@ -1186,11 +1389,43 @@
                 return;
             }
             const turn = decide.closest('.chat-live') || decide.closest('.chat-bot');
+            // A production approval card: the typed site key (and warning tick) go along,
+            // straight to the approval. Checked here first, so a typo keeps the card.
+            const card = decide.closest('.chat-approval');
+            const cardError = card?.querySelector('.js-approval-error');
+            const fields = { chat: chatField.value, decision: decide.dataset.decision };
+            if (card && decide.dataset.decision === 'allow') {
+                for (const run of card.querySelectorAll('.js-approval')) {
+                    const key = run.querySelector('.js-approval-key');
+                    const ack = run.querySelector('.js-approval-ack');
+                    const problem = key.value.trim() !== key.dataset.site ? `Type ${key.dataset.site} exactly to approve.`
+                        : (ack && !ack.checked ? 'Tick the box to confirm you checked the warnings.' : '');
+                    if (problem) {
+                        cardError.textContent = problem;
+                        cardError.hidden = false;
+                        (problem.startsWith('Tick') ? ack : key).focus();
+                        return;
+                    }
+                    fields[`approve[${run.dataset.run}][key]`] = key.value.trim();
+                    if (ack) {
+                        fields[`approve[${run.dataset.run}][ack]`] = '1';
+                    }
+                }
+            }
             turn.querySelectorAll('.js-chat-decide').forEach((button) => { button.disabled = true; });
             turn.remove();
             live.start();
             try {
-                const answer = await post('assistant-confirm', { chat: chatField.value, decision: decide.dataset.decision });
+                const answer = await post('assistant-confirm', fields);
+                if (!answer.ok && answer.keep && card) {
+                    // Nothing ran: put the card back with the reason.
+                    live.cancel();
+                    log.append(turn);
+                    turn.querySelectorAll('.js-chat-decide').forEach((button) => { button.disabled = false; });
+                    cardError.textContent = answer.error;
+                    cardError.hidden = false;
+                    return;
+                }
                 if (!answer.ok) {
                     throw new Error(answer.error || 'The assistant could not go on.');
                 }
@@ -1201,6 +1436,13 @@
                 live.fail(error.message || 'Could not reach the tool. Check that it is still running.');
             } finally {
                 scrollDown();
+            }
+        });
+        // Enter in an approval card's key field presses Approve.
+        log.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && event.target.classList.contains('js-approval-key')) {
+                event.preventDefault();
+                event.target.closest('.chat-approval').querySelector('.js-chat-decide[data-decision="allow"]').click();
             }
         });
         input.addEventListener('keydown', (event) => {

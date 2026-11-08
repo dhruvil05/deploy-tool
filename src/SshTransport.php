@@ -189,7 +189,7 @@ final class SshTransport implements Transport
                 throw new \RuntimeException('Could not start ssh (' . Settings::sshBinary() . '). Check the SSH program in Settings.');
             }
             $code = proc_close($process);
-            return [$code, (string) file_get_contents($outputFile), trim((string) file_get_contents($errorFile))];
+            return [$code, TempFile::read($outputFile, 'ssh'), trim(TempFile::read($errorFile, 'ssh'))];
         } finally {
             @unlink($inputFile);
             @unlink($outputFile);
@@ -197,14 +197,17 @@ final class SshTransport implements Transport
         }
     }
 
-    /** Options for ssh: never ask anything, remember the server's key in storage/. */
+    /**
+     * Options for ssh: never ask anything, and only connect to a server whose key you trusted
+     * on the site's page (HostKeys), so a server can't be swapped for another unnoticed.
+     */
     public function sshOptions(): array
     {
         $options = [
             '-T',
             '-o', 'BatchMode=yes',
-            '-o', 'StrictHostKeyChecking=accept-new',
-            '-o', 'UserKnownHostsFile="' . str_replace('\\', '/', STORAGE_DIR) . '/known_hosts"',
+            '-o', 'StrictHostKeyChecking=yes',
+            '-o', 'UserKnownHostsFile="' . str_replace('\\', '/', HostKeys::file()) . '"',
             '-o', 'ConnectTimeout=20',
             '-o', 'ServerAliveInterval=15',
             '-o', 'ServerAliveCountMax=4',
@@ -224,7 +227,8 @@ final class SshTransport implements Transport
         if ($code === 255) {
             return match (true) {
                 str_contains($text, 'Permission denied') => 'SSH login failed: the server did not accept the key. Check the username and key file, and that the public key is added on the server (cPanel → SSH Access).',
-                str_contains($text, 'Host key verification failed'), str_contains($text, 'REMOTE HOST IDENTIFICATION HAS CHANGED') => 'The server\'s SSH key changed since the last connection. If that is expected, remove its line from storage/known_hosts.',
+                str_contains($text, 'REMOTE HOST IDENTIFICATION HAS CHANGED') => "The server's SSH key is not the one you trusted. If your host really changed it, check the new key under Server key on {$this->site['name']}'s page (Sites → Edit) and trust it; otherwise don't connect.",
+                str_contains($text, 'host key is known'), str_contains($text, 'Host key verification failed') => "The tool doesn't trust this server's SSH key yet. Check and trust it under Server key on {$this->site['name']}'s page (Sites → Edit).",
                 str_contains($text, 'timed out') => 'The SSH server took too long to answer. Check the host and port.',
                 str_contains($text, 'Could not resolve') => 'Could not find the SSH host. Check the host name.',
                 str_contains($text, 'Connection refused') => 'The server refused the SSH connection. Check the port.',

@@ -40,6 +40,16 @@ define('DEFAULT_STORAGE_DIR', APP_ROOT . '/storage');
     define('STORAGE_DIR', env('DEPLOY_TOOL_STORAGE') ?: (is_string($chosen) && is_dir($chosen) ? $chosen : DEFAULT_STORAGE_DIR));
 })();
 
+// PHP's own warnings never show on a page: they would break its layout and the JSON answers,
+// and can show file paths. They go to php-errors.log in the data folder instead (background
+// workers use worker.log). The tool reports its own problems in plain words.
+if (PHP_SAPI !== 'cli') {
+    ini_set('display_errors', '0');
+    ini_set('display_startup_errors', '0');
+    ini_set('log_errors', '1');
+    ini_set('error_log', STORAGE_DIR . '/php-errors.log');
+}
+
 // Laragon's php.ini says UTC; show and record times in Indian time.
 date_default_timezone_set('Asia/Kolkata');
 

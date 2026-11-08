@@ -94,22 +94,31 @@ PHP;
         ]);
     }
 
-    /** Calls the helper over HTTPS (POST, so the token stays out of server logs). */
+    /**
+     * Calls the helper over HTTPS (POST, so the token stays out of server logs). The site's
+     * certificate is checked, so the token only goes to the real site; an IP address can't
+     * have a matching certificate, so there it isn't.
+     */
     public static function callHelper(string $siteUrl, string $name, string $token): string
     {
         @set_time_limit(360);
-        $curl = curl_init(rtrim($siteUrl, '/') . '/' . $name);
+        $url = rtrim($siteUrl, '/') . '/' . $name;
+        $verify = !self::isIpUrl($url);
+        $curl = curl_init($url);
         curl_setopt_array($curl, [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => http_build_query(['t' => $token]),
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_TIMEOUT => 300,
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_SSL_VERIFYPEER => $verify,
+            CURLOPT_SSL_VERIFYHOST => $verify ? 2 : 0,
         ]);
         $body = curl_exec($curl);
         $status = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+        if ($body === false && in_array(curl_errno($curl), self::CERTIFICATE_ERRORS, true)) {
+            throw new \RuntimeException('The site\'s HTTPS certificate could not be checked (' . curl_error($curl) . '), so the fingerprint file was not called. Fix the certificate, or compare with "File sizes over FTP".');
+        }
         if ($body === false) {
             throw new \RuntimeException('Could not call the fingerprint file: ' . curl_error($curl));
         }
@@ -120,6 +129,15 @@ PHP;
             throw new \RuntimeException('The fingerprint list was cut off. Try the compare again.');
         }
         return (string) $body;
+    }
+
+    /** libcurl errors for a certificate that can't be checked (bad, self-signed, or no CA list). */
+    public const CERTIFICATE_ERRORS = [51, 58, 60, 77, 83];
+
+    /** Whether a URL's host is an IP address (no certificate can match it). */
+    public static function isIpUrl(string $url): bool
+    {
+        return filter_var(trim((string) parse_url($url, PHP_URL_HOST), '[]'), FILTER_VALIDATE_IP) !== false;
     }
 
     public static function parseHelperOutput(string $output): array

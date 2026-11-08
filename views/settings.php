@@ -15,6 +15,7 @@
  * @var string $tab the section to show
  * @var array $cloud CloudBackup::settings(), or the posted values after a mistake
  * @var array $cloudSaved CloudBackup::settings()
+ * @var array $security password on or off, the secrets key, the last web check
  */
 
 use DeployTool\CloudBackup;
@@ -44,6 +45,7 @@ $tabs = [
     'ai' => ['AI assistant', $aiAllowed ? 'Provider, model and limits' : 'Turned off in .env', $icon('<rect x="4" y="8" width="16" height="12" rx="3"></rect><path d="M12 8V4M9 14h.01M15 14h.01"></path>'), $aiAllowed ? ($ai['enabled'] === '1' ? 'On' : 'Off') : ''],
     'permissions' => ['AI permissions', $aiAllowed ? 'What the assistant may do' : 'Turned off in .env', $icon('<rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path>'), $aiAllowed ? count(array_filter(array_keys(\DeployTool\Ai::PERMISSIONS), static fn (string $key): bool => ($ai['perm_' . $key] ?? '0') !== '0')) . '/' . count(\DeployTool\Ai::PERMISSIONS) : ''],
     'cloud' => ['Cloud backup', CloudBackup::configured($cloudSaved) ? CloudBackup::SCHEDULES[$cloudSaved['schedule']] : 'Encrypted copies in the cloud', $icon('<path d="M7 18a5 5 0 1 1 .9-9.9A6 6 0 0 1 19 10a4 4 0 0 1-1 7.9z"></path><path d="M12 12v6M9.5 14.5 12 12l2.5 2.5"></path>'), CloudBackup::configured($cloudSaved) && $cloudSaved['schedule'] !== 'off' ? 'On' : ''],
+    'security' => ['Security', $security['password'] ? 'Password on' : 'Password and saved keys', $icon('<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path><path d="m9 12 2 2 4-4"></path>'), $security['password'] ? 'On' : ''],
     'storage' => ['Storage', 'Where the tool keeps its data', $icon('<ellipse cx="12" cy="6" rx="8" ry="3"></ellipse><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path>'), ''],
 ];
 $errorTabs = array_unique(array_map([Settings::class, 'tabOf'], array_keys($errors)));
@@ -184,6 +186,10 @@ $pane = static fn (string $key): string => ' id="tab-' . $key . '" class="settin
             <?= View::partial('settings_cloud', ['cloud' => $cloud, 'state' => CloudBackup::state(), 'saved' => $cloudSaved, 'errors' => $errors]) ?>
         </section>
 
+        <section<?= $pane('security') ?>>
+            <?= View::partial('settings_security', ['security' => $security]) ?>
+        </section>
+
         <section<?= $pane('storage') ?>>
             <?php if ($storage['missing'] !== null): ?>
                 <div class="notice notice-warning">Your storage folder <code><?= e($storage['missing']) ?></code> isn't available (an unplugged drive?), so the tool is using the folder next to it for now. Plug it back in, or choose another folder below.</div>
@@ -267,6 +273,10 @@ $pane = static fn (string $key): string => ' id="tab-' . $key . '" class="settin
 <?php // The Storage section's fields belong to this form (form="storage-form"): it acts at once. ?>
 <form method="post" action="index.php?r=storage-save" id="storage-form" class="js-confirm"
       data-confirm="Switch the folder the tool keeps its data in? Nothing can run while it copies.">
+    <input type="hidden" name="_csrf" value="<?= e(Http::csrfToken()) ?>">
+</form>
+<?php // Settings → Security's password fields belong to this form (form="security-form"): it acts at once. ?>
+<form method="post" action="index.php?r=security-save" id="security-form">
     <input type="hidden" name="_csrf" value="<?= e(Http::csrfToken()) ?>">
 </form>
 <?php // Settings → Cloud backup's Restore buttons fill and send this form. ?>

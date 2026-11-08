@@ -81,7 +81,25 @@ final class AssistantController
             Http::json(['ok' => false, 'error' => 'The assistant is switched off in Settings.'], 403);
         }
         $allow = ($_POST['decision'] ?? '') === 'allow';
-        $this->runAgent(static fn (Agent $agent, array &$chat, callable $checkpoint) => $agent->resume($chat, $allow, $checkpoint));
+        // A production approval card: the site key and warning tick the user typed, checked
+        // before anything runs so a typo just shows an error and the card stays.
+        $typed = [];
+        foreach ((array) ($_POST['approve'] ?? []) as $id => $fields) {
+            if (is_string($id) && is_array($fields)) {
+                $typed[$id] = ['key' => (string) ($fields['key'] ?? ''), 'ack' => !empty($fields['ack'])];
+            }
+        }
+        if ($allow && ($chat = ChatStore::load((string) ($_POST['chat'] ?? ''))) !== null) {
+            try {
+                $problem = Agent::checkApprovals($chat, $typed);
+            } catch (\RuntimeException $e) {
+                $problem = $e->getMessage();
+            }
+            if ($problem !== null) {
+                Http::json(['ok' => false, 'error' => $problem, 'keep' => true], 422);
+            }
+        }
+        $this->runAgent(static fn (Agent $agent, array &$chat, callable $checkpoint) => $agent->resume($chat, $allow, $checkpoint, $typed));
     }
 
     /** Loads the chat, holds its lock, lets $work run the assistant, saves, and answers with the new part. */

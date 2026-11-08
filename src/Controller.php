@@ -36,6 +36,11 @@ final class Controller
             'cloud-backup-now' => $this->cloudBackupNow(),
             'cloud-list' => $this->cloudList(),
             'cloud-restore' => $this->cloudRestore(),
+            'ssh-hostkey' => $this->sshHostKey(),
+            'ssh-trust' => $this->sshTrust(),
+            'login' => $this->login(),
+            'logout' => $this->logout(),
+            'security-save' => $this->securitySave(),
             'assistant', 'assistant-new', 'assistant-send', 'assistant-confirm', 'assistant-poll', 'assistant-stop', 'assistant-rename', 'assistant-delete' => (new AssistantController())->handle($route),
             default => (new RunController())->handle($route),
         };
@@ -351,6 +356,12 @@ final class Controller
             'phpBinary' => Settings::phpBinary($values['php_path'] ?? ''),
             'sshBinary' => Settings::sshBinary($values['ssh_path'] ?? ''),
             'storage' => $this->storageSummary(),
+            'security' => [
+                'password' => Auth::enabled(),
+                'secrets' => Secrets::status(),
+                'unreadable' => Secrets::$unreadable,
+                'exposure' => JsonStore::read('exposure'),
+            ],
         ], 'Settings');
     }
 
@@ -385,6 +396,9 @@ final class Controller
             StorageLocation::change($useDefault ? null : $path, ($_POST['storage_copy'] ?? '') === '1');
             Http::flash('success', 'The tool now keeps its data in ' . StorageLocation::display($useDefault ? DEFAULT_STORAGE_DIR : $path)
                 . ". The old folder ($from) was left as it is; delete it yourself once you're sure.");
+            if (!$useDefault && ($warning = StorageLocation::warning($path)) !== null) {
+                Http::flash('warning', $warning);
+            }
         } catch (\RuntimeException $e) {
             Http::flash('danger', $e->getMessage());
         }
@@ -449,6 +463,81 @@ final class Controller
             Http::flash('danger', 'Not restored: ' . $e->getMessage());
         }
         Http::redirect('r=settings&tab=cloud');
+    }
+
+    /** Site page → Server key: the SSH server's key as it shows it now, to compare (JSON). */
+    private function sshHostKey(): void
+    {
+        Http::requireToken();
+        session_write_close();
+        $site = Sites::get((string) ($_GET['site'] ?? ''));
+        if ($site === null || $site['type'] !== 'ssh') {
+            Http::json(['ok' => false, 'error' => 'Not an SSH site.'], 404);
+        }
+        try {
+            $keys = HostKeys::scan($site['ssh_host'], (int) $site['ssh_port'], $site['ssh_user']);
+            $trusted = array_column(HostKeys::trusted($site['ssh_host'], (int) $site['ssh_port']), 'fingerprint');
+            Http::json(['ok' => true, 'keys' => array_map(static fn (array $key): array => [
+                'type' => $key['type'],
+                'fingerprint' => $key['fingerprint'],
+                'trusted' => in_array($key['fingerprint'], $trusted, true),
+            ], $keys)]);
+        } catch (\RuntimeException $e) {
+            Http::json(['ok' => false, 'error' => $e->getMessage()]);
+        }
+    }
+
+    /** Site page → Server key: trusts the key with the fingerprint you compared. */
+    private function sshTrust(): void
+    {
+        Http::requirePost();
+        $site = Sites::get((string) ($_POST['site'] ?? ''));
+        if ($site === null || $site['type'] !== 'ssh') {
+            Http::deny(404, 'Not an SSH site.');
+        }
+        try {
+            HostKeys::trust($site['ssh_host'], (int) $site['ssh_port'], (string) ($_POST['fingerprint'] ?? ''), $site['ssh_user']);
+            Http::flash('success', "Trusted {$site['ssh_host']}'s SSH key. The tool now connects to it, and refuses any other key.");
+        } catch (\RuntimeException $e) {
+            Http::flash('danger', $e->getMessage());
+        }
+        Http::redirect('r=site-edit&key=' . urlencode($site['key']) . '#server-key');
+    }
+
+    /** The sign-in page (only when a password is set in Settings → Security). */
+    private function login(): void
+    {
+        if (!Auth::enabled() || Auth::signedIn()) {
+            Http::redirect(Auth::takeReturn());
+        }
+        $error = null;
+        if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
+            Http::requirePost();
+            $error = Auth::login((string) ($_POST['password'] ?? ''));
+            if ($error === null) {
+                Http::redirect(Auth::takeReturn());
+            }
+        }
+        View::render('login', ['page' => 'login', 'error' => $error], 'Sign in');
+    }
+
+    private function logout(): void
+    {
+        Http::requirePost();
+        Auth::logout();
+        Http::redirect('r=login');
+    }
+
+    /** Settings → Security: set, change or remove the tool's password. */
+    private function securitySave(): void
+    {
+        Http::requirePost();
+        $remove = ($_POST['action'] ?? '') === 'remove';
+        $error = Auth::change((string) ($_POST['current'] ?? ''), $remove ? null : (string) ($_POST['new'] ?? ''), (string) ($_POST['repeat'] ?? ''));
+        Http::flash($error === null ? 'success' : 'danger', $error ?? ($remove
+            ? 'Password removed. Anyone who can use this computer can open the tool again.'
+            : 'Password saved. The tool now asks for it, and other browsers were signed out.'));
+        Http::redirect('r=settings&tab=security');
     }
 
     /** Settings → Storage: folders for the picker. */

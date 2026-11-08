@@ -9,6 +9,7 @@
  */
 
 use DeployTool\FtpTransport;
+use DeployTool\HostKeys;
 use DeployTool\Http;
 use DeployTool\Sites;
 
@@ -184,6 +185,31 @@ $types = [
                     </div>
                 </div>
                 <p class="help field-note">The folder that holds index.php: a full path, or one starting with ~/ for your home folder. The PHP command runs the tool's small helper there; usually just php.</p>
+
+                <?php $saved = $originalKey !== null ? Sites::get($originalKey) : null; ?>
+                <div class="server-key" id="server-key">
+                    <h3>Server key</h3>
+                    <?php if ($saved === null || $saved['type'] !== 'ssh'): ?>
+                        <p class="meta">Save the site first. Then check the server's SSH key here and trust it: the tool only connects to servers whose key you trusted.</p>
+                    <?php else: ?>
+                        <?php $trusted = HostKeys::trusted($saved['ssh_host'], (int) $saved['ssh_port']); ?>
+                        <?php if ($trusted): ?>
+                            <p class="meta">Trusted for <code><?= e(HostKeys::hostSpec($saved['ssh_host'], (int) $saved['ssh_port'])) ?></code>. The tool refuses to connect if the server shows any other key.</p>
+                            <ul class="server-key-list">
+                                <?php foreach ($trusted as $key): ?>
+                                    <li><span class="badge badge-success">Trusted</span> <code><?= e($key['fingerprint']) ?></code> <span class="meta"><?= e($key['type']) ?></span></li>
+                                <?php endforeach ?>
+                            </ul>
+                        <?php else: ?>
+                            <p class="meta">Not trusted yet, so the tool won't connect. Look the key up, compare its fingerprint with the one your host shows (cPanel → SSH Access, or ask them), then trust it.</p>
+                        <?php endif ?>
+                        <div class="server-key-actions">
+                            <button type="button" class="small js-hostkey-scan" data-site="<?= e($saved['key']) ?>" data-busy="Looking up…">Look up the server's key</button>
+                            <span class="meta">Uses the saved host and port; save first if you changed them.</span>
+                        </div>
+                        <ul class="server-key-list js-hostkey-result" aria-live="polite"></ul>
+                    <?php endif ?>
+                </div>
             </div>
 
             <div class="js-type-group type-fields" data-type="folder" <?= $type === 'folder' ? '' : 'hidden' ?>>
@@ -201,8 +227,14 @@ $types = [
     </div>
 
     <div class="save-bar">
-        <span class="meta">Passwords stay on this computer in storage/sites.json.</span>
+        <span class="meta">Passwords stay on this computer, encrypted.</span>
         <a class="button" href="index.php?r=sites">Cancel</a>
         <button type="submit" class="primary">Save site</button>
     </div>
+</form>
+<?php // Server key → Trust: sends the fingerprint you compared (the server is asked again). ?>
+<form method="post" action="index.php?r=ssh-trust" id="ssh-trust-form">
+    <input type="hidden" name="_csrf" value="<?= e(Http::csrfToken()) ?>">
+    <input type="hidden" name="site" value="<?= e((string) $originalKey) ?>">
+    <input type="hidden" name="fingerprint" class="js-hostkey-fingerprint">
 </form>

@@ -213,8 +213,12 @@ final class Markdown
                 if (!preg_match('#^(https?://|index\.php\?)#i', $url)) {
                     return $m[1]; // other schemes (javascript:, file:, …) lose the link, keep the text
                 }
-                $external = !str_starts_with($url, 'index.php');
-                return '<a href="' . e($url) . '"' . ($external ? ' target="_blank" rel="noopener noreferrer"' : '') . '>' . $m[1] . '</a>';
+                if (str_starts_with($url, 'index.php')) {
+                    return '<a href="' . e($url) . '">' . $m[1] . '</a>';
+                }
+                // Another site: its name shows next to the text, so a link can't pose as something else.
+                return '<a href="' . e($url) . '" target="_blank" rel="noopener noreferrer nofollow" referrerpolicy="no-referrer" title="' . e($url) . '">' . $m[1] . '</a>'
+                    . ' <span class="link-host">(' . e((string) parse_url($url, PHP_URL_HOST)) . ')</span>';
             }, $part);
             $part = (string) preg_replace('/\*\*(?=\S)(.+?)(?<=\S)\*\*|__(?=\S)(.+?)(?<=\S)__/', '<strong>$1$2</strong>', $part);
             $part = (string) preg_replace('/(?<![*\w])\*(?=\S)([^*]+?)(?<=\S)\*(?!\*)|(?<![\w_])_(?=\S)([^_]+?)(?<=\S)_(?![\w_])/', '<em>$1$2</em>', $part);

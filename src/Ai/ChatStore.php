@@ -36,12 +36,13 @@ final class ChatStore
         return $chat !== [] ? $chat : null;
     }
 
-    public static function save(array &$chat): void
+    /** $renaming: this save gives the chat its new name, so the stored one doesn't win. */
+    public static function save(array &$chat, bool $renaming = false): void
     {
         $chat['updated_at'] = time();
         // A name given while an answer was being written wins over the answer's copy.
         $stored = JsonStore::readFile(self::dir() . "/{$chat['id']}.json");
-        if (!empty($stored['named'])) {
+        if (!$renaming && !empty($stored['named'])) {
             $chat['title'] = $stored['title'];
             $chat['named'] = true;
         }
@@ -70,7 +71,7 @@ final class ChatStore
         }
         $chat['title'] = (string) preg_replace('/^(.{0,80}).*$/us', '$1', $title);
         $chat['named'] = true;
-        self::save($chat);
+        self::save($chat, true);
         return null;
     }
 

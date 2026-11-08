@@ -73,7 +73,7 @@ final class Tools
                 'exclude' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Paths to leave out.'],
                 'include' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Left-out paths to put back.'],
             ], 'required' => ['run_id']]],
-            ['name' => 'approve_run', 'description' => "Approves a deploy, match or rollback that is waiting for review, so it runs. Only when the user's latest message clearly approves this run, after you showed them its files and warnings. Never for production sites (those are approved on their page, by typing the site key). Follow with wait_for_run.", 'parameters' => ['properties' => [
+            ['name' => 'approve_run', 'description' => "Approves a deploy, match or rollback that is waiting for review, so it runs. Only when the user's latest message clearly approves this run, after you showed them its files and warnings. For a production site the chat shows the user a card where they type the site key themselves; just call this when they ask, and never type, guess or ask for the key in words. Follow with wait_for_run.", 'parameters' => ['properties' => [
                 'run_id' => ['type' => 'string'],
                 'warnings_checked' => ['type' => 'boolean', 'description' => 'True only if the user saw the run\'s warnings ("Edited on server" and similar) and still wants it.'],
                 'delete_files' => ['type' => 'boolean', 'description' => 'Also delete the files removed in git, when the run has any. Default true, as on the review page.'],
@@ -121,7 +121,7 @@ final class Tools
     /** The site settings the assistant may set. The password is deliberately missing. */
     private const SITE_FIELDS = [
         'name' => ['type' => 'string'],
-        'type' => ['type' => 'string', 'enum' => ['ftp', 'ssh', 'folder'], 'description' => 'ftp or ssh for a server, folder for a folder on this computer (testing).'],
+        'type' => ['type' => 'string', 'enum' => ['ftp', 'ssh'], 'description' => 'ftp or ssh. Folder sites (a folder on this computer) are added on the Sites page only.'],
         'gets_code_from' => ['type' => 'string', 'description' => "local:<key> for this chat's local, or site:<key> for one of its sites (e.g. site:staging for a prod site). Default: the local."],
         'production' => ['type' => 'boolean', 'description' => 'A production site: deploys need the typed site key and never delete files.'],
         'url' => ['type' => 'string', 'description' => 'Site address, https://…'],
@@ -138,7 +138,6 @@ final class Tools
         'ssh_key' => ['type' => 'string', 'description' => 'Path of the private key file on this computer; empty for the default key.'],
         'ssh_root' => ['type' => 'string', 'description' => 'Folder holding index.php, starting with / or ~/.'],
         'ssh_php' => ['type' => 'string', 'description' => 'PHP command on the server, usually php.'],
-        'path' => ['type' => 'string', 'description' => 'Folder sites: the folder on this computer.'],
     ];
 
     /** action => the permission it needs (Ai::PERMISSIONS); actions not listed only read. */
@@ -180,7 +179,25 @@ final class Tools
      *
      * @return array{result: string, ok: bool, label: string, link: ?string, run: ?string} run: the run it is about, if any
      */
-    public static function run(string $name, array $arguments, ?string $local = null): array
+    /**
+     * The run id when this call approves a production deploy or match that is waiting for
+     * review: the chat then shows the user a card to type the site key themselves.
+     */
+    public static function productionApproval(array $call): ?string
+    {
+        if (($call['name'] ?? '') !== 'approve_run') {
+            return null;
+        }
+        try {
+            $run = RunStore::load(self::text((array) ($call['arguments'] ?? []), 'run_id'));
+        } catch (\RuntimeException) {
+            return null;
+        }
+        return !empty($run['production']) && in_array($run['type'], ['deploy', 'sync'], true) && $run['status'] === 'review' ? $run['id'] : null;
+    }
+
+    /** $typed: what the user typed on a production approval card (run id => key, ack), never the model. */
+    public static function run(string $name, array $arguments, ?string $local = null, array $typed = []): array
     {
         self::$local = $local;
         $label = self::label($name, $arguments);
@@ -208,7 +225,7 @@ final class Tools
                 'wait_for_run' => self::waitForRun(self::text($arguments, 'run_id'), (int) ($arguments['seconds'] ?? 60)),
                 'set_review_files' => self::setReviewFiles(self::text($arguments, 'run_id'), $arguments),
                 'set_compare_ticks' => self::setCompareTicks(self::text($arguments, 'compare_run_id'), $arguments),
-                'approve_run' => self::approveRun(self::text($arguments, 'run_id'), $arguments),
+                'approve_run' => self::approveRun(self::text($arguments, 'run_id'), $arguments, $typed),
                 'list_locals_and_sites' => [self::listAll(), null],
                 'local_status' => [self::localStatus(self::text($arguments, 'local')), null],
                 'site_status' => [self::siteStatus(self::site($arguments)), null],
@@ -467,16 +484,34 @@ final class Tools
     }
 
     /** @return array{0: array, 1: string} */
-    private static function approveRun(string $id, array $arguments): array
+    private static function approveRun(string $id, array $arguments, array $typed = []): array
     {
         $run = self::loadRun($id);
         if (!in_array($run['type'], ['deploy', 'sync', 'rollback'], true)) {
             throw new \RuntimeException('Only deploys, matches and rollbacks can be approved.');
         }
-        if (!empty($run['production'])) {
-            throw new \RuntimeException("{$run['site_name']} is a production site, so it is approved on the run's page, where the user types the site key.");
-        }
         $who = Settings::get('deployer_name') ?: 'the user';
+        if (!empty($run['production'])) {
+            if ($run['type'] === 'rollback') {
+                throw new \RuntimeException("{$run['site_name']} is a production site, so a rollback there is approved on the run's page.");
+            }
+            // Only what the user typed on the chat's approval card counts; nothing from the model.
+            $mine = $typed[$run['id']] ?? null;
+            if (!is_array($mine)) {
+                throw new \RuntimeException("{$run['site_name']} is a production site: the user approves it on the card the chat shows, by typing the site key. Never type or ask for the key in words.");
+            }
+            $error = DeployRun::approve($run, ['confirm' => (string) ($mine['key'] ?? ''), 'ack_warnings' => !empty($mine['ack']) ? '1' : '', 'approve_deletes' => '']);
+            if ($error !== null) {
+                throw new \RuntimeException($error);
+            }
+            Runner::log($run, 'info', "Approved in the AI assistant chat by $who, who typed the site key.");
+            RunStore::save($run);
+            Worker::ensure($run);
+            return [
+                ['run_id' => $run['id'], 'status' => 'Approved by the user (site key typed): uploading to production in the background. Files removed in git are not deleted on production.', 'next' => 'Use wait_for_run with this run_id, then tell the user how it went.'],
+                'index.php?r=run&id=' . urlencode($run['id']),
+            ];
+        }
         if ($run['type'] === 'rollback') {
             if (!Ai::can('rollback')) {
                 throw new \RuntimeException('Not allowed: approving a rollback also needs "Roll back deploys" in Settings → AI permissions.');
@@ -638,6 +673,10 @@ final class Tools
         if (($unknown = array_diff(array_keys($fields), $allowed)) !== []) {
             throw new \RuntimeException('These settings can\'t be set from the chat: ' . implode(', ', $unknown) . '.');
         }
+        // A folder site writes into a folder on this computer, so only the user adds or changes one.
+        if (($fields['type'] ?? null) === 'folder' || ($existing['type'] ?? null) === 'folder') {
+            throw new \RuntimeException('Folder sites (a folder on this computer) are added and changed on the Sites page only. Tell the user where to click.');
+        }
         if ($existing !== null && !empty($existing['production']) && array_key_exists('production', $fields) && empty($fields['production'])) {
             throw new \RuntimeException("{$existing['name']} is a production site. Only the user can unmark that, on the site's page.");
         }
@@ -703,6 +742,19 @@ final class Tools
             throw new \RuntimeException('These can\'t be set this way: ' . implode(', ', $unknown) . (in_array('extra_protected', $unknown, true) ? ' (use protect_paths for protected paths).' : '.'));
         }
         $existing = $key !== null ? (Sources::get($key) ?? throw new \RuntimeException('This chat has no local to edit.')) : null;
+        // Text the model reads could ask it to point a local at any repository on this computer
+        // (and send its code to the provider): a new local must sit beside an existing one, and
+        // an existing local's folder is only changed by the user.
+        if (isset($fields['repo_path'])) {
+            if ($existing !== null) {
+                throw new \RuntimeException("A local's repository folder is changed on the Sites page only. Tell the user where to click.");
+            }
+            $parent = static fn (string $path): string => strtolower(rtrim(str_replace('\\', '/', dirname(rtrim(str_replace('\\', '/', $path), '/'))), '/'));
+            $parents = array_map(static fn (array $local): string => $parent($local['repo_path']), Sources::all());
+            if (!in_array($parent((string) $fields['repo_path']), $parents, true)) {
+                throw new \RuntimeException('From the chat, a new local must be a folder beside an existing local (for example in ' . implode(' or ', array_unique(array_map(static fn (array $local): string => dirname($local['repo_path']), Sources::all()))) . '). Others are added on the Sites page.');
+            }
+        }
         $input = ($existing ?? ['key' => '', 'name' => '', 'repo_path' => '', 'branch' => '', 'remote' => 'origin', 'extra_protected' => '']);
         foreach ($fields as $field => $value) {
             $input[$field] = (string) $value;

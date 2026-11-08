@@ -13,6 +13,17 @@ use DeployTool\Ai;
 
 $hasError = static fn (string $field): string => isset($errors[$field]) ? ' has-error' : '';
 $error = static fn (string $field): string => isset($errors[$field]) ? '<p class="error-text">' . e($errors[$field]) . '</p>' : '';
+
+// The line under each provider's name on its card.
+$providerNotes = [
+    'openrouter' => 'Many models, one key',
+    'openai' => 'GPT models',
+    'anthropic' => 'Claude models',
+    'groq' => 'Fast open models',
+    'ollama' => 'On this computer · free',
+    'lmstudio' => 'On this computer · free',
+    'custom' => 'Any OpenAI-style API',
+];
 ?>
 <?php if (!$allowed): ?>
     <section class="card settings-card ai-card">
@@ -33,34 +44,49 @@ $error = static fn (string $field): string => isset($errors[$field]) ? '<p class
         </div>
         <p class="meta">A chat bot that compares, prepares deploys and explains changes for you. Approving deploys and rollbacks always stays with you.</p>
 
-        <div class="ai-grid">
-            <div>
-                <input type="hidden" name="ai_enabled" value="0">
-                <label class="choice-tile ai-toggle">
-                    <input type="checkbox" name="ai_enabled" value="1"<?= $ai['enabled'] === '1' ? ' checked' : '' ?>>
-                    <strong>Enable AI assistant</strong>
-                    <span>Off hides the assistant and blocks it, but keeps the details here.</span>
-                </label>
+        <input type="hidden" name="ai_enabled" value="0">
+        <label class="set-toggle">
+            <span class="set-toggle-text">
+                <strong>Enable AI assistant</strong>
+                <span>Off hides the assistant and blocks it, but keeps the details below. What it may do is set in <a href="index.php?r=settings&amp;tab=permissions" class="js-settings-goto" data-tab="permissions">AI permissions</a>.</span>
+            </span>
+            <input type="checkbox" class="switch" name="ai_enabled" value="1" role="switch"<?= $ai['enabled'] === '1' ? ' checked' : '' ?>>
+        </label>
 
-                <p class="help ai-perm-link">What it may do is set in <a href="index.php?r=settings&amp;tab=permissions" class="js-settings-goto" data-tab="permissions">AI permissions</a>.</p>
+        <section class="set-section">
+            <div class="set-section-head">
+                <h3>Provider</h3>
+                <p class="meta">A preset fills in the base URL. Custom works with any OpenAI-style API.</p>
+            </div>
+            <fieldset class="field<?= $hasError('ai_provider') ?>">
+                <legend class="sr-only">Provider</legend>
+                <div class="provider-grid">
+                    <?php foreach (Ai::PRESETS as $key => [$label, $base, , $needsKey]): ?>
+                        <label class="provider-card">
+                            <input type="radio" name="ai_provider" value="<?= e($key) ?>" class="js-ai-provider" data-base="<?= e($base) ?>" data-key="<?= $needsKey ? '1' : '0' ?>"<?= $ai['provider'] === $key ? ' checked' : '' ?>>
+                            <span class="provider-mark" aria-hidden="true"><?= e(mb_substr($label, 0, 1)) ?></span>
+                            <span class="provider-text">
+                                <strong><?= e($label) ?></strong>
+                                <span><?= e($providerNotes[$key] ?? '') ?></span>
+                            </span>
+                        </label>
+                    <?php endforeach ?>
+                </div>
+                <?= $error('ai_provider') ?>
+            </fieldset>
+        </section>
 
-                <fieldset class="field<?= $hasError('ai_provider') ?>">
-                    <legend>Provider</legend>
-                    <div class="segmented">
-                        <?php foreach (Ai::PRESETS as $key => [$label, $base, , $needsKey]): ?>
-                            <label><input type="radio" name="ai_provider" value="<?= e($key) ?>" class="js-ai-provider" data-base="<?= e($base) ?>" data-key="<?= $needsKey ? '1' : '0' ?>"<?= $ai['provider'] === $key ? ' checked' : '' ?>><span><?= e($label) ?></span></label>
-                        <?php endforeach ?>
-                    </div>
-                    <p class="help">A preset fills in the base URL. Custom works with any OpenAI-style API.</p>
-                    <?= $error('ai_provider') ?>
-                </fieldset>
-
+        <section class="set-section">
+            <div class="set-section-head">
+                <h3>Connection</h3>
+                <p class="meta">Where the provider answers, and your key for it.</p>
+            </div>
+            <div class="set-pair">
                 <div class="field<?= $hasError('ai_base_url') ?>">
                     <label for="ai_base_url">Base URL</label>
                     <input type="text" id="ai_base_url" name="ai_base_url" value="<?= e($ai['base_url']) ?>" class="mono-input" spellcheck="false" placeholder="https://…/v1">
                     <?= $error('ai_base_url') ?>
                 </div>
-
                 <div class="field<?= $hasError('ai_api_key') ?>">
                     <label for="ai_api_key">API key</label>
                     <input type="password" id="ai_api_key" name="ai_api_key" value="" autocomplete="new-password" placeholder="<?= $keySaved ? 'Saved. Blank keeps it.' : '' ?>">
@@ -68,51 +94,59 @@ $error = static fn (string $field): string => isset($errors[$field]) ? '<p class
                     <?= $error('ai_api_key') ?>
                 </div>
             </div>
+        </section>
 
-            <div>
-                <div class="field<?= $hasError('ai_model') ?>">
-                    <label for="ai_model">Model</label>
-                    <div class="input-button">
-                        <input type="text" id="ai_model" name="ai_model" value="<?= e($ai['model']) ?>" list="ai-model-list" class="mono-input" spellcheck="false" placeholder="for example anthropic/claude-sonnet-5-5">
-                        <button type="button" class="js-ai-models" data-busy="Loading…">Load models</button>
-                    </div>
-                    <datalist id="ai-model-list"></datalist>
-                    <p class="help js-ai-models-status">Type a model name, or load the provider's list and pick one. It must support tool calling.</p>
-                    <?= $error('ai_model') ?>
+        <section class="set-section">
+            <div class="set-section-head">
+                <h3>Model</h3>
+                <p class="meta">It must support tool calling. Test checks that with one small request.</p>
+            </div>
+            <div class="field<?= $hasError('ai_model') ?>">
+                <label for="ai_model" class="sr-only">Model</label>
+                <div class="input-button">
+                    <input type="text" id="ai_model" name="ai_model" value="<?= e($ai['model']) ?>" list="ai-model-list" class="mono-input" spellcheck="false" placeholder="for example anthropic/claude-sonnet-5-5">
+                    <button type="button" class="js-ai-models" data-busy="Loading…">Load models</button>
+                    <button type="button" class="js-ai-test" data-busy="Testing…">Test</button>
                 </div>
+                <datalist id="ai-model-list"></datalist>
+                <p class="help js-ai-models-status">Type a model name, or load the provider's list and pick one. Test uses the details on this page, saved or not.</p>
+                <?= $error('ai_model') ?>
+            </div>
+            <div class="ai-test-result js-ai-test-result" aria-live="polite"></div>
+        </section>
 
-                <div class="field">
-                    <div class="ai-test">
-                        <button type="button" class="js-ai-test" data-busy="Testing…">Test</button>
-                        <div class="ai-test-result js-ai-test-result" aria-live="polite">
-                            <span class="meta">Tests the details above, saved or not, with one small request.</span>
-                        </div>
-                    </div>
+        <section class="set-section">
+            <div class="set-section-head">
+                <h3>Limits</h3>
+                <p class="meta">Each message is a few requests to the provider; these cap the cost.</p>
+            </div>
+            <div class="set-pair ai-limits">
+                <div class="field<?= $hasError('ai_max_steps') ?>">
+                    <label for="ai_max_steps">Steps per message</label>
+                    <input type="number" id="ai_max_steps" name="ai_max_steps" min="1" max="20" value="<?= e($ai['max_steps']) ?>">
+                    <p class="help">Most actions it may run for one message (1 to 20).</p>
+                    <?= $error('ai_max_steps') ?>
                 </div>
-
-                <div class="field-row ai-limits">
-                    <div class="field<?= $hasError('ai_max_steps') ?>">
-                        <label for="ai_max_steps">Steps per message</label>
-                        <input type="number" id="ai_max_steps" name="ai_max_steps" min="1" max="20" value="<?= e($ai['max_steps']) ?>">
-                        <p class="help">Most actions it may run for one message.</p>
-                        <?= $error('ai_max_steps') ?>
-                    </div>
-                    <div class="field<?= $hasError('ai_max_messages') ?>">
-                        <label for="ai_max_messages">Messages kept per chat</label>
-                        <input type="number" id="ai_max_messages" name="ai_max_messages" min="10" max="200" value="<?= e($ai['max_messages']) ?>">
-                        <p class="help">Older ones aren't re-sent, which keeps cost down.</p>
-                        <?= $error('ai_max_messages') ?>
-                    </div>
+                <div class="field<?= $hasError('ai_max_messages') ?>">
+                    <label for="ai_max_messages">Messages kept per chat</label>
+                    <input type="number" id="ai_max_messages" name="ai_max_messages" min="10" max="200" value="<?= e($ai['max_messages']) ?>">
+                    <p class="help">Older ones aren't re-sent, which keeps cost down (10 to 200).</p>
+                    <?= $error('ai_max_messages') ?>
                 </div>
             </div>
-        </div>
+        </section>
 
-        <div class="field ai-instructions<?= $hasError('ai_instructions') ?>">
-            <label for="ai_instructions">Your instructions</label>
-            <textarea id="ai_instructions" name="ai_instructions" rows="6" placeholder="For example:&#10;- When I say untick, only change the ticks. Never start an upload unless I say upload or deploy.&#10;- Always list the files and ask before preparing anything.&#10;- Answer in short bullet points."><?= e($ai['instructions']) ?></textarea>
-            <p class="help">House rules in plain words, added to every chat. They can't unlock anything AI permissions don't allow.</p>
-            <?= $error('ai_instructions') ?>
-        </div>
+        <section class="set-section">
+            <div class="set-section-head">
+                <h3>Your instructions</h3>
+                <p class="meta">House rules in plain words, added to every chat. They can't unlock anything AI permissions don't allow.</p>
+            </div>
+            <div class="field ai-instructions<?= $hasError('ai_instructions') ?>">
+                <label for="ai_instructions" class="sr-only">Your instructions</label>
+                <textarea id="ai_instructions" name="ai_instructions" rows="6" placeholder="For example:&#10;- When I say untick, only change the ticks. Never start an upload unless I say upload or deploy.&#10;- Always list the files and ask before preparing anything.&#10;- Answer in short bullet points."><?= e($ai['instructions']) ?></textarea>
+                <?= $error('ai_instructions') ?>
+            </div>
+        </section>
 
         <p class="meta ai-env-note">To remove the assistant for good, set <code>DEPLOY_TOOL_AI=false</code> in the .env file in the tool's folder (copy .env.example to start one).</p>
     </section>

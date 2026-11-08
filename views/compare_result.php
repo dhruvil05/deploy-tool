@@ -91,11 +91,42 @@ $renderTree = static function (array $node, string $list, bool $checked, bool $o
         <p class="meta">Compared by file size: an edit that keeps the same size isn't spotted, and files with Windows line endings show as different. Use the fingerprint method for an exact answer.</p>
     <?php endif ?>
 
+    <?php $nonEmpty = array_keys(array_filter($lists, static fn (string $key): bool => !empty($result[$key]), ARRAY_FILTER_USE_KEY)); ?>
+    <?php if ($nonEmpty !== []): ?>
+        <div class="result-toolbar js-result-toolbar">
+            <?php if (count($nonEmpty) > 1): ?>
+                <div class="view-switch" role="group" aria-label="Layout of the lists">
+                    <button type="button" class="js-result-view" data-view="stacked" aria-pressed="true">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2" y="2" width="12" height="4" rx="1"></rect><rect x="2" y="10" width="12" height="4" rx="1"></rect></svg>
+                        Stacked
+                    </button>
+                    <button type="button" class="js-result-view" data-view="columns" aria-pressed="false">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2" y="2" width="4" height="12" rx="1"></rect><rect x="10" y="2" width="4" height="12" rx="1"></rect></svg>
+                        Side by side
+                    </button>
+                </div>
+                <div class="result-pick js-result-pick" role="group" aria-label="Lists shown side by side" hidden>
+                    <span class="meta">Show</span>
+                    <?php foreach ($nonEmpty as $key): ?>
+                        <button type="button" class="result-chip js-result-chip" data-list="<?= e($key) ?>" aria-pressed="true"><?= e($lists[$key][0]) ?> <span><?= count($result[$key]) ?></span></button>
+                    <?php endforeach ?>
+                </div>
+            <?php endif ?>
+            <label class="result-filter">
+                <span class="sr-only">Filter the paths</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+                <input type="search" class="js-result-filter" placeholder="Filter paths in every list…" spellcheck="false" autocomplete="off">
+            </label>
+        </div>
+    <?php endif ?>
+
+    <div class="result-lists js-result-lists">
     <?php foreach ($lists as $key => [$label, $help]): ?>
         <?php if (!empty($result[$key])): ?>
-            <details class="card section result-section" id="<?= e($key) ?>" <?= ($key === 'extra' && ($_GET['open'] ?? '') === 'extra') || ($pickable[$key] ?? false) ? 'open' : '' ?>>
+            <details class="card section result-section" id="<?= e($key) ?>" data-list="<?= e($key) ?>" <?= ($key === 'extra' && ($_GET['open'] ?? '') === 'extra') || ($pickable[$key] ?? false) ? 'open' : '' ?>>
                 <summary>
                     <span class="section-title"><?= e($label) ?></span> <span class="pill<?= in_array($key, ['differs', 'missing'], true) ? ' pill-warning' : '' ?>"><?= count($result[$key]) ?></span>
+                    <span class="result-shown js-result-shown" hidden></span>
                     <span class="section-help"><?= e($help) ?></span>
                 </summary>
                 <?php if (isset($pickable[$key])): ?>
@@ -139,9 +170,11 @@ $renderTree = static function (array $node, string $list, bool $checked, bool $o
                     <p class="meta">Showing 500. The export has all of them.</p>
                 <?php endif ?>
                 <?php endif ?>
+                <p class="meta result-none js-result-none" hidden>No path in this list matches the filter.</p>
             </details>
         <?php endif ?>
     <?php endforeach ?>
+    </div>
 
     <?php if ($run['recorded']): ?>
         <div class="notice notice-success section">Commit <?= e(short_sha($run['to'])) ?> was recorded as this server's version.</div>

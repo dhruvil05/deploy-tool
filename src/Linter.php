@@ -101,7 +101,7 @@ final class Linter
             }
             fclose($pipes[0]);
             $code = proc_close($process);
-            return (string) file_get_contents($outputFile);
+            return TempFile::read($outputFile, 'PHP');
         } finally {
             @unlink($outputFile);
         }

@@ -25,11 +25,15 @@ final class CloudBackup
 
     public const SCHEDULES = ['off' => 'Only when I click', 'daily' => 'Once a day', 'deploy' => 'After every deploy, match or rollback'];
 
-    private const MAGIC = "DTBK1\n";
-    private const ITERATIONS = 200000;
+    /** File header => PBKDF2 rounds. New backups use the last; older ones still open. */
+    private const FORMATS = ["DTBK1\n" => 200000, "DTBK2\n" => 600000];
     /** Never in a backup: this computer's own state, and the cloud settings themselves. */
-    private const SKIP = ['location.json', 'cloud.json', 'cloud-state.json', 'worker.log', '.htaccess'];
+    private const SKIP = ['location.json', 'cloud.json', 'cloud-state.json', 'exposure.json', 'auth.json', 'worker.log', 'php-errors.log', '.htaccess'];
     private const SKIP_FOLDERS = ['cache', 'restore-safety'];
+    /** Kept sealed in cloud.json (Secrets). */
+    private const SECRETS = ['secret_key', 'passphrase'];
+    /** The secrets key rides inside the (encrypted) backup, so a restore on another computer can unlock the passwords. */
+    private const KEY_ENTRY = '__secret.key';
 
     public static function defaults(): array
     {
@@ -50,7 +54,11 @@ final class CloudBackup
 
     public static function settings(): array
     {
-        return array_merge(self::defaults(), array_intersect_key(JsonStore::read('cloud'), self::defaults()));
+        $stored = JsonStore::read('cloud');
+        if (Secrets::needsSealing($stored, self::SECRETS)) {
+            JsonStore::write('cloud', Secrets::sealFields($stored, self::SECRETS));
+        }
+        return array_merge(self::defaults(), array_intersect_key(Secrets::openFields($stored, self::SECRETS), self::defaults()));
     }
 
     public static function configured(?array $settings = null): bool
@@ -119,7 +127,7 @@ final class CloudBackup
 
     public static function save(array $values): void
     {
-        JsonStore::write('cloud', array_intersect_key($values, self::defaults()));
+        JsonStore::write('cloud', Secrets::sealFields(array_intersect_key($values, self::defaults()), self::SECRETS));
     }
 
     /** The last backup's result: at, name, size, error, by. */
@@ -145,6 +153,7 @@ final class CloudBackup
         if (!self::configured($settings)) {
             throw new \RuntimeException('Set up the cloud backup first.');
         }
+        self::client($settings); // stops here when the saved keys can't be unlocked, before the passphrase is used
         $lock = fopen(STORAGE_DIR . '/cloud-backup.lock', 'c');
         if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB)) {
             throw new \RuntimeException('A backup is already being made.');
@@ -221,12 +230,19 @@ final class CloudBackup
             foreach (self::localFiles(true) as $relative => $full) {
                 unlink($full);
             }
+            $backupKey = in_array(self::KEY_ENTRY, $names, true) ? Secrets::importKey((string) Zip::read($zip, self::KEY_ENTRY)) : null;
+            $names = array_values(array_diff($names, [self::KEY_ENTRY]));
             foreach ($names as $name) {
                 $target = STORAGE_DIR . '/' . $name;
                 if (!is_dir(dirname($target)) && !mkdir(dirname($target), 0700, true) && !is_dir(dirname($target))) {
                     throw new \RuntimeException('Could not create ' . dirname($target));
                 }
                 file_put_contents($target, (string) Zip::read($zip, $name));
+            }
+            // Passwords sealed with the backup's key are sealed again with this computer's key.
+            if ($backupKey !== null) {
+                Secrets::resealFile('sites', ['password'], true, $backupKey);
+                Secrets::resealFile('ai', ['api_key'], false, $backupKey);
             }
             return ['files' => count($names), 'safety' => StorageLocation::display($safety)];
         } finally {
@@ -265,6 +281,9 @@ final class CloudBackup
         foreach (self::localFiles($withBackups) as $relative => $full) {
             yield $relative => (string) file_get_contents($full);
         }
+        if (($key = Secrets::exportKey()) !== null) {
+            yield self::KEY_ENTRY => $key;
+        }
     }
 
     /** @return array<string, string> relative name => full path of the data files to back up */
@@ -295,28 +314,30 @@ final class CloudBackup
 
     private static function encrypt(string $data, string $passphrase): string
     {
+        $magic = (string) array_key_last(self::FORMATS);
         $salt = random_bytes(16);
         $iv = random_bytes(12);
-        $key = hash_pbkdf2('sha256', $passphrase, $salt, self::ITERATIONS, 32, true);
+        $key = hash_pbkdf2('sha256', $passphrase, $salt, self::FORMATS[$magic], 32, true);
         $tag = '';
-        $cipher = openssl_encrypt($data, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag, self::MAGIC, 16);
+        $cipher = openssl_encrypt($data, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag, $magic, 16);
         if ($cipher === false) {
             throw new \RuntimeException('Could not encrypt the backup.');
         }
-        return self::MAGIC . $salt . $iv . $tag . $cipher;
+        return $magic . $salt . $iv . $tag . $cipher;
     }
 
     private static function decrypt(string $sealed, string $passphrase): string
     {
-        if (!str_starts_with($sealed, self::MAGIC) || strlen($sealed) < strlen(self::MAGIC) + 44) {
+        $magic = substr($sealed, 0, 6);
+        if (!isset(self::FORMATS[$magic]) || strlen($sealed) < 6 + 44) {
             throw new \RuntimeException('That file is not a deploy tool backup.');
         }
-        $offset = strlen(self::MAGIC);
+        $offset = strlen($magic);
         $salt = substr($sealed, $offset, 16);
         $iv = substr($sealed, $offset + 16, 12);
         $tag = substr($sealed, $offset + 28, 16);
-        $key = hash_pbkdf2('sha256', $passphrase, $salt, self::ITERATIONS, 32, true);
-        $data = openssl_decrypt(substr($sealed, $offset + 44), 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag, self::MAGIC);
+        $key = hash_pbkdf2('sha256', $passphrase, $salt, self::FORMATS[$magic], 32, true);
+        $data = openssl_decrypt(substr($sealed, $offset + 44), 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag, $magic);
         if ($data === false) {
             throw new \RuntimeException('Wrong passphrase, or the backup is damaged.');
         }
@@ -325,6 +346,9 @@ final class CloudBackup
 
     private static function client(array $settings): S3
     {
+        if (Secrets::isSealed($settings['secret_key']) || Secrets::isSealed($settings['passphrase'])) {
+            throw new \RuntimeException("The saved cloud keys can't be unlocked on this computer (the key file is missing or different). Type the secret key and passphrase again, then save.");
+        }
         return new S3($settings['endpoint'], $settings['region'] !== '' ? $settings['region'] : 'us-east-1', $settings['bucket'], $settings['access_key'], $settings['secret_key']);
     }
 

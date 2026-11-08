@@ -17,7 +17,7 @@ final class Settings
     public const COMPARE_METHODS = ['fingerprint' => 'Fingerprint file', 'sizes' => 'File sizes over FTP'];
 
     /** The Settings page's sections, in menu order. */
-    public const TABS = ['general', 'deploys', 'protected', 'programs', 'ai', 'permissions', 'cloud', 'storage'];
+    public const TABS = ['general', 'deploys', 'protected', 'programs', 'ai', 'permissions', 'cloud', 'security', 'storage'];
 
     /** The Settings section a form field is in, to open it when that field has a mistake. */
     public static function tabOf(string $field): string

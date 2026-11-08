@@ -51,7 +51,7 @@ $suggestions = ['What changed since the last deploy?', 'Is staging up to date?',
             <?php $allowedLabels = array_map(static fn (array $p): string => $p[0], array_filter(Ai::PERMISSIONS, static fn (string $key): bool => ($settings['perm_' . $key] ?? '0') !== '0', ARRAY_FILTER_USE_KEY)); ?>
             <p><strong>What it can do now</strong></p>
             <p>Read status, history, compare results and file changes<?= $allowedLabels ? ', and: ' . e(implode(', ', array_map('lcfirst', $allowedLabels))) : '' ?>.</p>
-            <p class="chat-lock"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span>It acts only when you ask, never approves on production, and you choose the rest in <a href="index.php?r=settings&amp;tab=permissions">AI permissions</a>.</span></p>
+            <p class="chat-lock"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span>It acts only when you ask. Production only goes ahead when you type the site key on its card. You choose the rest in <a href="index.php?r=settings&amp;tab=permissions">AI permissions</a>.</span></p>
         </section>
     </aside>
 

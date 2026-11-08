@@ -19,7 +19,9 @@ final class Git
      */
     public function run(array $args, ?string $input = null): array
     {
-        $command = array_merge([$this->binary, '-C', $this->repo, '-c', 'core.quotepath=off'], $args);
+        // No automatic maintenance: git would start it in the background after a fetch, and on
+        // Windows that background process keeps our output files open. Your own git still does it.
+        $command = array_merge([$this->binary, '-C', $this->repo, '-c', 'core.quotepath=off', '-c', 'maintenance.auto=false', '-c', 'gc.auto=0'], $args);
         // Input and output go through files: pipes can deadlock when git writes a lot while
         // we write, and on Windows PHP reads a big pipe output many times slower than a file.
         $inputFile = tempnam(sys_get_temp_dir(), 'dtgit');
@@ -34,8 +36,8 @@ final class Git
                 throw new \RuntimeException("Could not start git ({$this->binary}). Check the git path in Settings.");
             }
             $code = proc_close($process);
-            $stdout = (string) file_get_contents($outputFile);
-            $stderr = trim((string) file_get_contents($errorFile));
+            $stdout = TempFile::read($outputFile, 'git');
+            $stderr = trim(TempFile::read($errorFile, 'git'));
         } finally {
             @unlink($inputFile);
             @unlink($outputFile);
@@ -235,6 +237,35 @@ final class Git
             }
         }
         return $files;
+    }
+
+    /**
+     * Files of a commit with lines matching an extended regex: path => number of such lines.
+     * Only names and counts come back, never the lines, so suspect content is never written
+     * to a temporary file (where an antivirus would rightly quarantine it).
+     *
+     * @param string[] $paths pathspecs, for example 'package.json' or ':(glob)*.config.js'
+     */
+    public function grepCount(string $sha, string $pattern, array $paths): array
+    {
+        [$code, $stdout, $stderr] = $this->run(array_merge(['grep', '-c', '-I', '-E', '-e', $pattern, $sha, '--'], $paths));
+        if ($code > 1) { // 1 means no match
+            throw new \RuntimeException('git grep failed: ' . ($stderr !== '' ? $stderr : "exit code $code"));
+        }
+        $hits = [];
+        foreach (explode("\n", trim($stdout)) as $line) {
+            if (preg_match('/^[^:]+:(.+):(\d+)$/', $line, $m)) {
+                $hits[$m[1]] = (int) $m[2];
+            }
+        }
+        return $hits;
+    }
+
+    /** Which of these paths are files at the top of a commit (names only). */
+    public function rootFiles(string $sha, array $names): array
+    {
+        $output = trim($this->okRaw(array_merge(['ls-tree', '--name-only', $sha, '--'], $names)));
+        return $output === '' ? [] : explode("\n", $output);
     }
 
     /** Downloads new commits from the remote. Changes no local branch or file. */
