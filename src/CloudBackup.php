@@ -28,7 +28,7 @@ final class CloudBackup
     /** File header => PBKDF2 rounds. New backups use the last; older ones still open. */
     private const FORMATS = ["DTBK1\n" => 200000, "DTBK2\n" => 600000];
     /** Never in a backup: this computer's own state, and the cloud settings themselves. */
-    private const SKIP = ['location.json', 'cloud.json', 'cloud-state.json', 'exposure.json', 'auth.json', 'worker.log', 'php-errors.log', '.htaccess'];
+    private const SKIP = ['location.json', 'cloud.json', 'cloud-state.json', 'exposure.json', 'auth.json', 'notify-state.json', 'worker.log', 'php-errors.log', '.htaccess'];
     private const SKIP_FOLDERS = ['cache', 'restore-safety'];
     /** Kept sealed in cloud.json (Secrets). */
     private const SECRETS = ['secret_key', 'passphrase'];

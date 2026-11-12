@@ -34,6 +34,12 @@ $last = $stats['last'];
     <a class="button" href="index.php?r=source-edit">Add local</a>
 </div>
 
+<?php if (!\DeployTool\Auth::enabled() && empty($_COOKIE['dt_hide_password_note'])): ?>
+    <div class="notice notice-info password-note js-password-note">
+        <span><strong>No password yet.</strong> Anyone who can use this computer, including other Windows users and programs on it, can open this tool and deploy with the saved logins. <a href="index.php?r=settings&amp;tab=security">Set a password</a></span>
+        <button type="button" class="small js-password-note-hide">Not now</button>
+    </div>
+<?php endif ?>
 <?php if ($nameMissing): ?>
     <div class="notice notice-warning">Start in <a href="index.php?r=settings">Settings</a>: enter your name. It is recorded with every deploy.</div>
 <?php endif ?>

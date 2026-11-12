@@ -4,6 +4,7 @@
  * it ran and its answer. Action results (tool messages) stay hidden.
  *
  * @var array $messages in Agent's format
+ * @var string $draft the answer being written right now (optional)
  */
 
 use DeployTool\Ai\Markdown;
@@ -157,3 +158,9 @@ $icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="cur
         </div>
     <?php endif ?>
 <?php endforeach ?>
+<?php if (($draft ?? '') !== ''): ?>
+    <div class="chat-bot is-draft">
+        <span class="chat-avatar"><?= $icon ?></span>
+        <div class="chat-bot-body"><div class="chat-text"><?= Markdown::html($draft) ?></div></div>
+    </div>
+<?php endif ?>

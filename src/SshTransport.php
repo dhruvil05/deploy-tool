@@ -110,6 +110,21 @@ final class SshTransport implements Transport
     }
 
     /**
+     * git's blob hash of each file on the server (path => hash, or null when it isn't there),
+     * without sending the files: what verifying uploads needs.
+     */
+    public function hashMany(array $paths): array
+    {
+        $paths = array_values(array_map('strval', $paths));
+        [$answer] = $this->call('hash', ['paths' => $paths]);
+        $hashes = (array) ($answer['hashes'] ?? []);
+        if (count($hashes) !== count($paths)) {
+            throw new \RuntimeException('The server sent an incomplete answer.');
+        }
+        return array_combine($paths, $hashes);
+    }
+
+    /**
      * The fingerprint of every file on the server (protected folders are never read),
      * in the format of Fingerprint::parseHelperOutput().
      */

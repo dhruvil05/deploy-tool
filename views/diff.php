@@ -15,6 +15,7 @@
  * @var array{0: int, 1: int} $position this file's number and the number of files
  * @var ?string $prevPath
  * @var ?string $nextPath
+ * @var bool $embed only the changes, for the review page's Preview
  */
 
 use DeployTool\DiffView;
@@ -43,6 +44,7 @@ $cell = static function (?array $row, string $side): string {
     return '<td class="ln' . $type . '">' . ($number ?? '') . '</td><td class="code' . $type . '">' . $row['html'] . $eol . '</td>';
 };
 ?>
+<?php if (empty($embed)): ?>
 <div class="diff-nav">
     <a href="index.php?r=run&amp;id=<?= e(urlencode($run['id'])) ?>">← <?= e(RunView::title($run)) ?></a>
     <?php if ($position[1] > 1): ?>
@@ -88,6 +90,7 @@ $cell = static function (?array $row, string $side): string {
         <?php endforeach ?>
     </div>
 </div>
+<?php endif ?>
 
 <?php if ($beforeMissing && !$afterMissing): ?>
     <div class="notice notice-info">New file: it wasn't there <?= e($labels[0]) ?>, so every line is added.</div>

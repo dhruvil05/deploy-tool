@@ -218,6 +218,9 @@ final class DeployRun
         $raw = ServerState::readRaw($context->transport());
         $state = ServerState::parse($raw);
         $run['prev_state_raw'] = $raw;
+        // Speed-up "Smarter checks after a deploy": the check pages as they are before anything
+        // changes, to compare with afterwards. Only a measurement: never stops the deploy.
+        $run['site_check_before'] = SiteCheck::measure($site);
         if ($run['type'] === 'deploy') {
             $run['from'] = $state['commit'] ?? $run['baseline'];
             $run['from_recorded'] = $state !== null;
@@ -370,6 +373,7 @@ final class DeployRun
     {
         $run['touched'] = true;
         $transport = $context->transport();
+        self::uploadInOneGo($run, $context);
         $count = 0;
         while ($batch = Runner::pick($run['files'], static fn (array $file): bool => $file['action'] === 'upload' && !$file['done'], $transport->batchSize())) {
             if (microtime(true) >= $deadline) {
@@ -391,6 +395,34 @@ final class DeployRun
         }
         self::logCount($run, 'Uploaded', $count, 'upload');
         $run['phase'] = 'delete';
+    }
+
+    /**
+     * Speed-up "Upload big FTP deploys in one go" (BundleUpload): tried once per run. Files it
+     * couldn't write, or everything when it can't be used, go up file by file afterwards.
+     */
+    private static function uploadInOneGo(array &$run, RunContext $context): void
+    {
+        $pending = array_keys(array_filter($run['files'], static fn (array $f): bool => $f['action'] === 'upload' && !$f['done']));
+        if (!empty($run['bundle_tried']) || !BundleUpload::suits($context->site, count($pending))) {
+            return;
+        }
+        $run['bundle_tried'] = true;
+        foreach ($pending as $i) {
+            $run['files'][$i]['sent'] = true; // the server copies may change from here on, so a rollback restores them
+        }
+        try {
+            $errors = BundleUpload::upload($context->transport(), $context->site['url'], $context->blobs($run['to'], array_map(static fn (int $i): string => $run['files'][$i]['path'], $pending)));
+        } catch (\RuntimeException $e) {
+            Runner::log($run, 'warning', 'Uploading in one go didn\'t work (' . $e->getMessage() . '), so the files go up one by one.');
+            return;
+        }
+        foreach ($pending as $i) {
+            if (!isset($errors[$run['files'][$i]['path']])) {
+                $run['files'][$i]['done'] = true;
+            }
+        }
+        Runner::log($run, 'info', 'Uploaded ' . (count($pending) - count($errors)) . ' file(s) in one go' . ($errors ? '; ' . count($errors) . ' go up one by one.' : '.'));
     }
 
     private static function deleteRemoved(array &$run, RunContext $context, float $deadline): void
@@ -427,23 +459,31 @@ final class DeployRun
         $run['phase'] = 'verify';
     }
 
-    /** Downloads every changed file again and compares it byte for byte. */
+    /**
+     * Checks every changed file on the server against the commit: downloads it again and
+     * compares it byte for byte, or, with the speed-up "Verify SSH uploads by fingerprint",
+     * compares git's blob hash the server sends (exact all the same, far less to transfer).
+     */
     private static function verify(array &$run, RunContext $context, float $deadline): void
     {
         $transport = $context->transport();
+        $byHash = $transport instanceof SshTransport && Settings::on('feature_fast_verify');
+        $verb = $byHash ? 'Verified by fingerprint' : 'Verified';
         $count = 0;
         while ($batch = Runner::pick($run['files'], static fn (array $file): bool => $file['done'] && !$file['verified'], $transport->batchSize())) {
             if (microtime(true) >= $deadline) {
-                self::logCount($run, 'Verified', $count, 'verify');
+                self::logCount($run, $verb, $count, 'verify');
                 return;
             }
-            $servers = $transport->getMany(array_map(static fn (int $i): string => $run['files'][$i]['path'], $batch));
+            $paths = array_map(static fn (int $i): string => $run['files'][$i]['path'], $batch);
             $uploads = array_filter($batch, static fn (int $i): bool => $run['files'][$i]['action'] === 'upload');
             $blobs = $context->blobs($run['to'], array_map(static fn (int $i): string => $run['files'][$i]['path'], $uploads));
+            $servers = $byHash ? $transport->hashMany($paths) : $transport->getMany($paths);
             foreach ($batch as $i) {
                 $file = $run['files'][$i];
                 $server = $servers[$file['path']];
-                $ok = $file['action'] === 'upload' ? $server === $blobs[$file['path']] : $server === null;
+                $expected = $file['action'] === 'upload' ? ($byHash ? Fingerprint::blobSha($blobs[$file['path']]) : $blobs[$file['path']]) : null;
+                $ok = $server === $expected;
                 if ($ok) {
                     $run['files'][$i]['verified'] = true;
                 } else {
@@ -453,7 +493,7 @@ final class DeployRun
                 $count++;
             }
         }
-        self::logCount($run, 'Verified', $count, 'verify');
+        self::logCount($run, $verb, $count, 'verify');
 
         $pending = count(array_filter($run['files'], static fn (array $file): bool => !$file['done']
             && ($file['action'] === 'upload' || $run['delete_approved'])));
@@ -476,7 +516,7 @@ final class DeployRun
 
     private static function siteCheck(array &$run, RunContext $context): void
     {
-        $run['site_check'] = SiteCheck::run($context->site);
+        $run['site_check'] = SiteCheck::run($context->site, $run['site_check_before'] ?? []);
         Runner::log($run, $run['site_check']['ok'] ? 'info' : 'error', 'Site check: ' . $run['site_check']['message']);
         $run['status'] = 'sql';
         $run['phase'] = 'sql';

@@ -51,6 +51,73 @@ final class OpenAiStyle
         return $out;
     }
 
+    /** A streamed answer being put together (Provider::stream). */
+    public static function streamStart(): array
+    {
+        return ['text' => '', 'calls' => [], 'finish' => null, 'model' => null, 'usage' => null];
+    }
+
+    /**
+     * One streamed event ("data: {…}") into $state. Returns whether new text arrived.
+     * Tool calls come in pieces by index: the id and name once, the arguments in parts.
+     */
+    public static function streamEvent(array &$state, array $event): bool
+    {
+        if (isset($event['error'])) {
+            $error = $event['error'];
+            throw new \RuntimeException('The provider answered with an error: ' . (is_array($error) ? ($error['message'] ?? json_encode($error)) : (string) $error));
+        }
+        if (is_string($event['model'] ?? null)) {
+            $state['model'] = $event['model'];
+        }
+        if (is_array($event['usage'] ?? null)) {
+            $state['usage'] = $event['usage'];
+        }
+        $choice = $event['choices'][0] ?? null;
+        if (!is_array($choice)) {
+            return false;
+        }
+        if (!empty($choice['finish_reason'])) {
+            $state['finish'] = $choice['finish_reason'];
+        }
+        $delta = (array) ($choice['delta'] ?? []);
+        foreach ((array) ($delta['tool_calls'] ?? []) as $piece) {
+            $i = (int) ($piece['index'] ?? count($state['calls']));
+            $state['calls'][$i] ??= ['id' => '', 'name' => '', 'arguments' => ''];
+            if (!empty($piece['id'])) {
+                $state['calls'][$i]['id'] = (string) $piece['id'];
+            }
+            $state['calls'][$i]['name'] .= (string) ($piece['function']['name'] ?? '');
+            $state['calls'][$i]['arguments'] .= (string) ($piece['function']['arguments'] ?? '');
+        }
+        if (is_string($delta['content'] ?? null) && $delta['content'] !== '') {
+            $state['text'] .= $delta['content'];
+            return true;
+        }
+        return false;
+    }
+
+    /** The streamed answer in the normal (non-streamed) shape, for reply(). */
+    public static function streamAnswer(array $state): array
+    {
+        ksort($state['calls']);
+        return [
+            'model' => $state['model'],
+            'usage' => $state['usage'] ?? [],
+            'choices' => [[
+                'finish_reason' => $state['finish'],
+                'message' => [
+                    'content' => $state['text'],
+                    'tool_calls' => array_values(array_map(static fn (array $call, int $i): array => [
+                        'id' => $call['id'] !== '' ? $call['id'] : 'call_' . $i,
+                        'type' => 'function',
+                        'function' => ['name' => $call['name'], 'arguments' => $call['arguments']],
+                    ], $state['calls'], array_keys($state['calls']))),
+                ],
+            ]],
+        ];
+    }
+
     /** @return array{text: string, calls: list<array{id: string, name: string, arguments: array}>, stop: string, model: ?string, usage: array{in: int, out: int, cost: ?float}} */
     public static function reply(array $answer): array
     {

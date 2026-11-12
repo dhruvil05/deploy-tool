@@ -7,6 +7,7 @@
 
 use DeployTool\DeployRun;
 use DeployTool\Http;
+use DeployTool\ReviewInsights;
 use DeployTool\RunStore;
 
 $isRollback = $run['type'] === 'rollback';
@@ -19,6 +20,14 @@ $expires = (int) $run['reviewed_at'] + \DeployTool\Settings::reviewMinutes() * 6
 $backupOf = $isRollback ? $run['rollback_of'] : $run['id'];
 $backupSize = \DeployTool\Backup::size($backupOf);
 $total = count($run['files']);
+// Speed-ups "Review insights" and "Spot database changes" (Settings → Speed-ups).
+$insights = !$isRollback && $total > 0 && \DeployTool\Settings::on('feature_review_insights');
+$stats = $insights ? ReviewInsights::lineStats($run) : [];
+$risky = $insights ? ReviewInsights::riskyFiles(array_column($uploads, 'path')) : [];
+$folders = $insights ? ReviewInsights::folders(array_column($run['files'], 'path'), $stats) : [];
+$databaseChanges = !$isRollback && \DeployTool\Settings::on('feature_detect_sql') ? ReviewInsights::databaseChangesOf($run) : [];
+$debugCode = $isRollback ? [] : ReviewInsights::debugCode($run);
+$diffUrl = static fn (string $path, string $extra = ''): string => 'index.php?r=run-diff&id=' . urlencode($run['id']) . '&path=' . urlencode($path) . $extra;
 $buttonLabel = match (true) {
     $total === 0 => 'Record the version only',
     $isRollback => "Roll back $total file(s)",
@@ -66,8 +75,64 @@ $buttonLabel = match (true) {
         <p class="meta">No backup needed: none of these files exist on the server yet.</p>
     <?php endif ?>
 
+    <?php if ($databaseChanges): ?>
+        <div class="notice notice-warning sql-files">
+            <strong>Database changes in this deploy: <?= count($databaseChanges) ?> file<?= count($databaseChanges) === 1 ? '' : 's' ?>.</strong>
+            After the upload the deploy waits at the SQL step; have the SQL ready.
+            <ul><?php foreach (array_slice($databaseChanges, 0, 12, true) as $path => $why): ?><li><code><?= e($path) ?></code> · <?= e($why) ?> · <a href="<?= e($diffUrl($path)) ?>" target="_blank" rel="noopener">Changes</a></li><?php endforeach ?></ul>
+        </div>
+    <?php endif ?>
+
+    <?php if ($debugCode): ?>
+        <div class="notice notice-warning sql-files">
+            <strong>Leftover debug code in <?= count($debugCode) ?> file<?= count($debugCode) === 1 ? '' : 's' ?>:</strong> lines this deploy adds that print or stop the page.
+            <ul>
+                <?php foreach (array_slice($debugCode, 0, 10, true) as $path => $hits): ?>
+                    <?php foreach ($hits as [$line, $what, $code]): ?>
+                        <li><code><?= e($path) ?>:<?= (int) $line ?></code> · <?= e($what) ?> · <code class="debug-line"><?= e($code) ?></code></li>
+                    <?php endforeach ?>
+                <?php endforeach ?>
+            </ul>
+        </div>
+    <?php endif ?>
+
+    <?php if (!$isRollback && $total > 0 && \DeployTool\Ai\Explain::available()): ?>
+        <?= \DeployTool\View::partial('run_explain', ['run' => $run]) ?>
+    <?php endif ?>
+
+    <?php if ($insights && ($folders || $risky)): ?>
+        <div class="review-insights">
+            <section class="card">
+                <h3>Where the changes are</h3>
+                <table class="insight-table">
+                    <?php foreach (array_slice($folders, 0, 8, true) as $folder => $f): ?>
+                        <tr>
+                            <td><code><?= e($folder) ?></code></td>
+                            <td class="num"><?= $f['files'] ?> file<?= $f['files'] === 1 ? '' : 's' ?></td>
+                            <td class="num"><?php if ($stats): ?><span class="diff-add">+<?= $f['added'] ?></span> <span class="diff-del">−<?= $f['removed'] ?></span><?php endif ?></td>
+                        </tr>
+                    <?php endforeach ?>
+                </table>
+                <?php if (count($folders) > 8): ?><p class="meta">And <?= count($folders) - 8 ?> more folders.</p><?php endif ?>
+                <?php if (!$stats): ?><p class="meta">Line counts are shown for deploys from a recorded version; this run compares with the server's own files.</p><?php endif ?>
+            </section>
+            <section class="card">
+                <h3>Look at these first <span class="pill<?= $risky ? ' pill-warning' : '' ?>"><?= count($risky) ?></span></h3>
+                <?php if ($risky): ?>
+                    <ul class="insight-risky">
+                        <?php foreach (array_slice($risky, 0, 10, true) as $path => $why): ?>
+                            <li><code><?= e($path) ?></code> <span class="badge badge-warning"><?= e($why) ?></span> <a href="<?= e($diffUrl($path)) ?>" target="_blank" rel="noopener">Changes</a></li>
+                        <?php endforeach ?>
+                    </ul>
+                <?php else: ?>
+                    <p class="meta">No config, server rules, dependencies, routes or entry points change.</p>
+                <?php endif ?>
+            </section>
+        </div>
+    <?php endif ?>
+
     <?php if ($total > 0): ?>
-        <?= \DeployTool\View::partial('run_files', ['run' => $run, 'filters' => true]) ?>
+        <?= \DeployTool\View::partial('run_files', ['run' => $run, 'filters' => true, 'stats' => $stats, 'risky' => $risky, 'preview' => $insights]) ?>
     <?php else: ?>
         <p>No files to change. Approving only records commit <code><?= e(short_sha($run['to'])) ?></code> as the server's version.</p>
     <?php endif ?>

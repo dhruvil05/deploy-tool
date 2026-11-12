@@ -95,10 +95,58 @@ $showFiles = $run['files'] && $run['status'] !== 'review';
 <?php if (!empty($run['helper']) && empty($run['helper']['deleted']) && $run['status'] !== 'running'): ?>
     <div class="notice notice-warning">The temporary file <code><?= e($run['helper']['name']) ?></code> may still be on the server. It stops working after 15 minutes; delete it over FTP to be sure.</div>
 <?php endif ?>
+<?php // Speed-up "Release notes": the commits this deploy brings, ready to paste into a chat or email. ?>
+<?php if (\DeployTool\Settings::on('feature_release_notes') && $run['type'] === 'deploy' && $run['from'] !== null && $run['to'] !== null && $run['from'] !== $run['to']): ?>
+    <?php
+    try {
+        $notesGit = \DeployTool\Sources::git(\DeployTool\RunStore::source($run));
+        $notes = $notesGit->recentCommits($run['from'] . '..' . $run['to'], 100);
+    } catch (\RuntimeException) {
+        $notes = [];
+    }
+    $notesText = 'Deploy to ' . $run['site_name'] . ' · ' . short_sha($run['from']) . ' → ' . short_sha($run['to']) . ' · ' . date('d M Y', (int) $run['created_at']) . "\n"
+        . implode("\n", array_map(static fn (array $c): string => '- ' . $c['subject'] . ' (' . $c['author'] . ', ' . short_sha($c['sha']) . ')', $notes));
+    ?>
+    <?php if ($notes): ?>
+        <details class="card section result-section release-notes">
+            <summary>
+                <span class="section-title">Release notes</span> <span class="pill"><?= count($notes) ?><?= count($notes) === 100 ? '+' : '' ?></span>
+                <span class="section-help">The commits this deploy brings, newest first.</span>
+            </summary>
+            <div class="release-notes-tools">
+                <button type="button" class="small js-copy" data-copy="<?= e($notesText) ?>">Copy as text</button>
+                <span class="meta">For Slack, Teams or an email to the team.</span>
+            </div>
+            <ul class="release-notes-list">
+                <?php foreach ($notes as $commit): ?>
+                    <li><code><?= e(short_sha($commit['sha'])) ?></code> <span><?= e($commit['subject']) ?></span> <span class="meta"><?= e($commit['author']) ?> · <?= e(substr($commit['date'], 0, 10)) ?></span></li>
+                <?php endforeach ?>
+            </ul>
+        </details>
+    <?php endif ?>
+<?php endif ?>
+
 <?php if (!empty($run['site_check'])): ?>
     <div class="notice notice-<?= $run['site_check']['ok'] ? ($run['site_check']['skipped'] ? 'info' : 'success') : 'danger' ?>">
         Site check: <?= e($run['site_check']['message']) ?>
         <?php if (!$run['site_check']['ok'] && $rollbackBlocker === null): ?> Consider rolling back.<?php endif ?>
+        <?php // Speed-up "Smarter checks after a deploy": each page, before → after, and Roll back right here. ?>
+        <?php if (\DeployTool\Settings::on('feature_smart_checks') && count($run['site_check']['pages'] ?? []) > 0 && (!$run['site_check']['ok'] || count($run['site_check']['pages']) > 1 || !empty($run['site_check_before']))): ?>
+            <ul class="check-pages">
+                <?php foreach ($run['site_check']['pages'] as $page): ?>
+                    <?php $was = $run['site_check_before'][$page['path']] ?? null; ?>
+                    <li class="<?= $page['ok'] ? (isset($page['note']) ? 'is-slower' : 'is-ok') : 'is-bad' ?>">
+                        <span class="check-mark" aria-hidden="true"><?= $page['ok'] ? (isset($page['note']) ? '!' : '✓') : '✗' ?></span>
+                        <code><?= e($page['path']) ?></code>
+                        <span>HTTP <?= (int) $page['status'] ?> · <?= e(number_format($page['ms'] / 1000, 1)) ?> s<?= $was !== null ? ' (before: HTTP ' . (int) $was[1] . ' · ' . e(number_format($was[2] / 1000, 1)) . ' s)' : '' ?></span>
+                        <?php if (isset($page['note'])): ?><strong><?= e($page['note']) ?></strong><?php endif ?>
+                    </li>
+                <?php endforeach ?>
+            </ul>
+            <?php if (!$run['site_check']['ok'] && $rollbackBlocker === null && in_array($run['type'], ['deploy', 'sync'], true)): ?>
+                <div class="check-actions"><?= $post('run-rollback', 'Roll back this deploy…', 'danger') ?></div>
+            <?php endif ?>
+        <?php endif ?>
     </div>
 <?php endif ?>
 <?php if ($run['type'] === 'rollback' && $run['status'] === 'done'): ?>
@@ -145,8 +193,40 @@ $showFiles = $run['files'] && $run['status'] !== 'review';
     <section class="card section">
         <h2>SQL</h2>
         <p>The files are deployed and recorded. If this deploy needs database changes, run them now in the database yourself, then confirm here.</p>
+        <?php $sqlFiles = \DeployTool\Settings::on('feature_detect_sql') ? \DeployTool\ReviewInsights::databaseChangesOf($run) : []; ?>
+        <?php if ($sqlFiles): ?>
+            <div class="notice notice-warning sql-files"><strong>This deploy has database changes:</strong>
+                <ul><?php foreach (array_slice($sqlFiles, 0, 12) as $path => $why): ?><li><code><?= e($path) ?></code> · <?= e($why) ?></li><?php endforeach ?></ul>
+            </div>
+        <?php endif ?>
         <?= $post('run-sql-done', 'SQL is done (or not needed)', 'primary') ?>
     </section>
+<?php endif ?>
+
+<?php // Speed-up "Promote to the next site": prepare the same commit on the sites that get their code from this one. ?>
+<?php if (\DeployTool\Settings::on('feature_promote') && in_array($run['type'], ['deploy', 'sync'], true) && in_array($run['status'], ['sql', 'done'], true) && !empty($run['new_state_raw'])): ?>
+    <?php $nextSites = array_filter(\DeployTool\Sites::all(), static fn (array $s): bool => $s['source'] === 'site:' . $run['site'] && empty($s['hidden'])); ?>
+    <?php foreach ($nextSites as $next): ?>
+        <?php $openNext = \DeployTool\RunStore::activeRunFor($next['key']); ?>
+        <section class="card section promote-card">
+            <div>
+                <h2>Next: <?= e($next['name']) ?><?php if ($next['production']): ?> <span class="badge badge-danger">Production</span><?php endif ?></h2>
+                <p class="meta"><?= e($next['name']) ?> gets its code from <?= e($run['site_name']) ?>, which now runs <code><?= e(short_sha($run['to'])) ?></code>. Prepare the same commit there: checks, backup, then your review. Nothing changes until you approve.</p>
+                <?php if (!empty($run['site_check']) && !$run['site_check']['ok']): ?>
+                    <p class="warning-text">The site check of <?= e($run['site_name']) ?> failed. Look at it before promoting.</p>
+                <?php endif ?>
+            </div>
+            <?php if ($openNext !== null): ?>
+                <a class="button" href="index.php?r=run&amp;id=<?= e(urlencode($openNext['id'])) ?>"><?= e($next['name']) ?> has an open run</a>
+            <?php else: ?>
+                <form method="post" action="index.php?r=deploy-start" class="inline">
+                    <input type="hidden" name="_csrf" value="<?= e(Http::csrfToken()) ?>">
+                    <input type="hidden" name="site" value="<?= e($next['key']) ?>">
+                    <button type="submit" class="primary">Prepare deploy to <?= e($next['name']) ?></button>
+                </form>
+            <?php endif ?>
+        </section>
+    <?php endforeach ?>
 <?php endif ?>
 
 <div class="run-toolbar">

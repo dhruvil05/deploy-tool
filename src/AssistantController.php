@@ -6,6 +6,7 @@ namespace DeployTool;
 
 use DeployTool\Ai\Agent;
 use DeployTool\Ai\ChatStore;
+use DeployTool\Ai\QuickCommands;
 
 /** The Assistant page: chats with the AI assistant. Gone entirely when .env turns AI off. */
 final class AssistantController
@@ -69,6 +70,10 @@ final class AssistantController
         $text = trim((string) ($_POST['message'] ?? ''));
         if ($text === '') {
             Http::json(['ok' => false, 'error' => 'Type a message first.'], 422);
+        }
+        // Speed-up "Quick commands in the chat": /status, /compare … run at once, without the model.
+        if (QuickCommands::applies($text)) {
+            $this->runAgent(static fn (Agent $agent, array &$chat) => QuickCommands::handle($chat, $text));
         }
         $this->runAgent(static fn (Agent $agent, array &$chat, callable $checkpoint) => $agent->reply($chat, $text, $checkpoint));
     }
@@ -177,7 +182,8 @@ final class AssistantController
         return [
             'ok' => true,
             'chat' => $chat['id'],
-            'html' => View::partial('assistant_turns', ['messages' => array_slice($chat['messages'], $lastUser + 1)]),
+            // The answer being written right now (speed-up "Answers that appear as they're written").
+            'html' => View::partial('assistant_turns', ['messages' => array_slice($chat['messages'], $lastUser + 1), 'draft' => (string) ($chat['draft'] ?? '')]),
             'usage' => ChatStore::usageText($chat),
         ];
     }

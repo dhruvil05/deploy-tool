@@ -40,6 +40,7 @@ $icon = static fn (string $path): string => '<svg width="18" height="18" viewBox
 $tabs = [
     'general' => ['General', 'Your name', $icon('<circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path>'), ''],
     'deploys' => ['Runs and deploys', 'Review time, compare, background', $icon('<path d="M12 3v12M7 10l5 5 5-5"></path><path d="M4 21h16"></path>'), ''],
+    'speedups' => ['Speed-ups', 'Optional, each on or off', $icon('<path d="M13 2 4 14h7l-1 8 9-12h-7z"></path>'), count(array_filter(array_keys(Settings::FEATURES), static fn (string $key): bool => ($values[$key] ?? '1') === '1')) . '/' . count(Settings::FEATURES)],
     'protected' => ['Protected paths', 'Never touched on any site', $icon('<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path>'), (string) $protectedCount],
     'programs' => ['Programs', 'Git, PHP and SSH', $icon('<rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 9l3 3-3 3M13 15h4"></path>'), ''],
     'ai' => ['AI assistant', $aiAllowed ? 'Provider, model and limits' : 'Turned off in .env', $icon('<rect x="4" y="8" width="16" height="12" rx="3"></rect><path d="M12 8V4M9 14h.01M15 14h.01"></path>'), $aiAllowed ? ($ai['enabled'] === '1' ? 'On' : 'Off') : ''],
@@ -184,6 +185,45 @@ $pane = static fn (string $key): string => ' id="tab-' . $key . '" class="settin
 
         <section<?= $pane('cloud') ?>>
             <?= View::partial('settings_cloud', ['cloud' => $cloud, 'state' => CloudBackup::state(), 'saved' => $cloudSaved, 'errors' => $errors]) ?>
+        </section>
+
+        <section<?= $pane('speedups') ?>>
+            <div class="card settings-card">
+                <h2>Speed-ups</h2>
+                <p class="meta">Optional extras that make deploying and reviewing faster. Each one can be switched off on its own; off, the tool works exactly as before.</p>
+                <div class="speedup-list">
+                    <?php foreach (Settings::FEATURES as $key => [$label, $what, $off]): ?>
+                        <input type="hidden" name="<?= e($key) ?>" value="0">
+                        <label class="set-toggle">
+                            <span class="set-toggle-text">
+                                <strong><?= e($label) ?></strong>
+                                <span><?= e($what) ?></span>
+                                <span class="speedup-off"><?= e($off) ?></span>
+                            </span>
+                            <input type="checkbox" class="switch" name="<?= e($key) ?>" value="1" role="switch"<?= ($values[$key] ?? '1') === '1' ? ' checked' : '' ?>>
+                        </label>
+                    <?php endforeach ?>
+                </div>
+                <div class="field speedup-webhook<?= $hasError('bundle_min_files') ?>">
+                    <label for="bundle_min_files">Upload in one go from</label>
+                    <div class="input-unit">
+                        <input type="number" id="bundle_min_files" name="bundle_min_files" min="2" max="5000" value="<?= e($values['bundle_min_files']) ?>">
+                        <span>files (FTP deploys, when "in one go" is on)</span>
+                    </div>
+                    <?= $error('bundle_min_files') ?>
+                </div>
+                <?php $webhookSaved = \DeployTool\Settings::get('notify_webhook') !== ''; ?>
+                <div class="field speedup-webhook<?= $hasError('notify_webhook') ?>">
+                    <label for="notify_webhook">Chat webhook for messages</label>
+                    <input type="password" id="notify_webhook" name="notify_webhook" value="" autocomplete="off" class="mono-input" placeholder="<?= $webhookSaved ? 'Saved. Blank keeps it.' : 'https://hooks.slack.com/services/…' ?>">
+                    <p class="help">From Slack (Incoming Webhooks), Teams (Workflows → "Post to a channel when a webhook request is received") or Discord (Channel → Integrations → Webhooks). Kept encrypted like the other passwords.</p>
+                    <?php if ($webhookSaved): ?>
+                        <label class="checkbox"><input type="checkbox" name="notify_webhook_remove" value="1"> <span>Remove the saved webhook</span></label>
+                    <?php endif ?>
+                    <?= $error('notify_webhook') ?>
+                </div>
+                <p class="meta speedup-ai">The AI assistant's speed-up, a backup model it switches to when the main one times out, is under <a href="index.php?r=settings&amp;tab=ai" class="js-settings-goto" data-tab="ai">AI assistant → Model</a>.</p>
+            </div>
         </section>
 
         <section<?= $pane('security') ?>>

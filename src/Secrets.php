@@ -170,18 +170,57 @@ final class Secrets
             return null;
         }
         if (!is_file($file)) {
-            $dir = dirname($file);
-            if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) {
-                return null;
-            }
-            $handle = @fopen($file, 'x'); // never replaces a key another process just made
-            if ($handle !== false) {
-                fwrite($handle, base64_encode(random_bytes(32)) . "\n");
-                fclose($handle);
-                @chmod($file, 0600);
+            self::create($file);
+        }
+        $key = self::read($file);
+        // A key file that can't be used (cut short, edited by hand) is set aside, not trusted
+        // and not silently dropped: a new key keeps new passwords encrypted, and values sealed
+        // with the old one show the "can't be unlocked" warning until they're typed again.
+        // A file only seconds old may still be being written by another request: left alone.
+        if ($key === null && is_file($file) && time() - (int) @filemtime($file) > 5) {
+            if (@rename($file, $file . '.broken-' . date('Ymd-His'))) {
+                self::create($file);
+                $key = self::read($file);
             }
         }
-        return self::$key = is_file($file) ? self::importKey((string) file_get_contents($file)) : null;
+        return self::$key = $key;
+    }
+
+    /** Makes a new key file; never replaces one another process just made. */
+    private static function create(string $file): void
+    {
+        $dir = dirname($file);
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) {
+            return;
+        }
+        $handle = @fopen($file, 'x');
+        if ($handle !== false) {
+            fwrite($handle, base64_encode(random_bytes(32)) . "\n");
+            fclose($handle);
+            @chmod($file, 0600);
+        }
+    }
+
+    /** The key in the file, trying a few times while another process may still be writing it. */
+    private static function read(string $file): ?string
+    {
+        for ($try = 0; $try < 10; $try++) {
+            $key = is_file($file) ? self::importKey((string) @file_get_contents($file)) : null;
+            if ($key !== null || !is_file($file)) {
+                return $key;
+            }
+            usleep(50_000);
+        }
+        return null;
+    }
+
+    /** Damaged key files set aside so far (newest first), for Settings → Security. */
+    public static function brokenKeys(): array
+    {
+        $file = self::keyFile();
+        $found = $file === null ? [] : (glob($file . '.broken-*') ?: []);
+        rsort($found);
+        return $found;
     }
 
     private static function inside(string $path, string $folder): bool

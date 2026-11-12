@@ -30,6 +30,12 @@ foreach ($changes['files'] ?? [] as [$status, $path]) {
     $counts['protected'] += ProtectedPaths::matches($path, $changes['protected']) ? 1 : 0;
 }
 $upToDate = $changes !== null && $changes['commits'] === 0 && $changes['files'] === [];
+// Speed-up "Spot database changes": shown before anything is prepared.
+$databaseChanges = [];
+if ($changes !== null && !$upToDate && \DeployTool\Settings::on('feature_detect_sql')) {
+    $uploads = array_values(array_filter(array_map(static fn (array $f): ?string => $f[0] === 'D' || ProtectedPaths::matches($f[1], $changes['protected']) ? null : $f[1], $changes['files'])));
+    $databaseChanges = \DeployTool\ReviewInsights::databaseChanges(Sites::git($site), $state['commit'] ?? null, $source['sha'] ?? null, $uploads);
+}
 ?>
 <header class="card run-hero">
     <p class="run-hero-kind"><span class="run-kind kind-deploy">Deploy</span><?php if ($site['production']): ?><span class="badge badge-danger">Production</span><?php endif ?></p>
@@ -84,6 +90,15 @@ $upToDate = $changes !== null && $changes['commits'] === 0 && $changes['files'] 
             <p class="metric-sub"><?= $counts['A'] ?> new · <?= $counts['M'] ?> changed · <?= $counts['D'] ?> removed</p></div>
         <div class="metric"><p class="metric-label">Protected, left out</p><p class="metric-value"><?= $counts['protected'] ?></p></div>
     </div>
+
+    <?php if ($databaseChanges): ?>
+        <div class="notice notice-warning sql-files">
+            <strong>This deploy changes the database: <?= count($databaseChanges) ?> file<?= count($databaseChanges) === 1 ? '' : 's' ?>.</strong>
+            Have the SQL ready: after the upload, the deploy waits at the SQL step until you run it.
+            <ul><?php foreach (array_slice($databaseChanges, 0, 12, true) as $path => $why): ?><li><code><?= e($path) ?></code> · <?= e($why) ?></li><?php endforeach ?></ul>
+            <?php if (count($databaseChanges) > 12): ?><p class="meta">And <?= count($databaseChanges) - 12 ?> more.</p><?php endif ?>
+        </div>
+    <?php endif ?>
 
     <div class="start-columns">
         <section class="card">

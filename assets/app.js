@@ -128,6 +128,110 @@
         });
     });
 
+    // Dashboard (speed-up "Check GitHub in the background"): fetches quietly when the last
+    // fetch is over 10 minutes old, then every 10 minutes while the page is open, and draws
+    // the local's card again. A failed fetch is left for the next try; the page never breaks.
+    const autoFetchCard = document.querySelector('.js-local-card[data-auto-fetch]');
+    if (autoFetchCard) {
+        const every = 10 * 60 * 1000;
+        const source = autoFetchCard.dataset.autoFetch;
+        let busy = false;
+        const quietFetch = async () => {
+            if (busy || document.hidden) {
+                return;
+            }
+            busy = true;
+            try {
+                const body = new FormData();
+                body.append('_csrf', token);
+                body.append('source', source);
+                const answer = await (await fetch('index.php?r=fetch-quiet', { method: 'POST', headers: { Accept: 'application/json' }, body })).json();
+                const card = document.querySelector('.js-local-card');
+                if (answer.ok && card) {
+                    card.outerHTML = answer.html; // escaped by the server's template
+                }
+            } catch (error) {
+                // offline, or GitHub slow: the next round tries again
+            } finally {
+                busy = false;
+            }
+        };
+        if (Date.now() / 1000 - Number(autoFetchCard.dataset.lastFetch || 0) > every / 1000) {
+            quietFetch();
+        }
+        setInterval(quietFetch, every);
+    }
+
+    // Review → "Explain this deploy" (speed-up, AI): asks the provider, then shows the answer.
+    document.addEventListener('click', async (event) => {
+        const button = event.target.closest('.js-explain-run');
+        if (!button) {
+            return;
+        }
+        const card = button.closest('.js-explain');
+        const errorLine = card.querySelector('.js-explain-error');
+        const label = button.textContent;
+        button.disabled = true;
+        button.textContent = button.dataset.busy;
+        errorLine.hidden = true;
+        try {
+            const body = new FormData();
+            body.append('_csrf', token);
+            body.append('id', card.dataset.run);
+            const answer = await (await fetch('index.php?r=run-explain', { method: 'POST', headers: { Accept: 'application/json' }, body })).json();
+            if (!answer.ok) {
+                throw new Error(answer.error || 'The AI provider did not answer.');
+            }
+            card.outerHTML = answer.html; // escaped by the server's template
+        } catch (error) {
+            errorLine.textContent = error.message || 'Could not reach the tool.';
+            errorLine.hidden = false;
+            button.disabled = false;
+            button.textContent = label;
+        }
+    });
+
+    // Dashboard → "No password yet": Not now hides it in this browser for a year.
+    document.querySelector('.js-password-note-hide')?.addEventListener('click', (event) => {
+        document.cookie = 'dt_hide_password_note=1; max-age=31536000; path=/; samesite=strict';
+        event.currentTarget.closest('.js-password-note').remove();
+    });
+
+    // Review → Preview (speed-up "Review insights"): a file's changes open under its row.
+    // The row copies the file row's data, so the filters above keep working.
+    document.querySelectorAll('.js-diff-preview').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const row = button.closest('tr');
+            const open = row.nextElementSibling?.classList.contains('diff-preview-row') ? row.nextElementSibling : null;
+            if (open) {
+                open.remove();
+                button.setAttribute('aria-expanded', 'false');
+                button.textContent = 'Preview';
+                return;
+            }
+            const preview = document.createElement('tr');
+            preview.className = 'diff-preview-row';
+            preview.dataset.action = row.dataset.action;
+            preview.dataset.warning = row.dataset.warning;
+            const cell = document.createElement('td');
+            cell.colSpan = row.children.length;
+            cell.innerHTML = '<p class="meta">Loading the changes…</p>';
+            preview.append(cell);
+            row.after(preview);
+            button.setAttribute('aria-expanded', 'true');
+            button.textContent = 'Hide';
+            try {
+                const response = await fetch(button.dataset.url, { headers: { Accept: 'text/html' } });
+                if (!response.ok) {
+                    throw new Error();
+                }
+                cell.innerHTML = '<div class="diff-preview">' + await response.text() + '</div>'; // escaped by the server's template
+            } catch (error) {
+                cell.innerHTML = '<p class="error-text">Could not load the changes. Use "Changes" to open them on their own page.</p>';
+            }
+        });
+    });
+
     // Dashboard: "Gets code from" saves as soon as it changes (production sites ask first).
     document.querySelectorAll('form.js-source').forEach((form) => {
         const select = form.querySelector('select');
@@ -1226,7 +1330,7 @@
                     // the next poll tries again
                 }
                 if (!finished) {
-                    pollTimer = setTimeout(poll, 1000);
+                    pollTimer = setTimeout(poll, 600); // often enough for an answer appearing as it is written
                 }
             };
             return {

@@ -84,6 +84,55 @@ and `storage/worker.log` says why.
 Protected paths (uploads, module uploads, media, app-config.php, .htaccess, …) are never
 uploaded, overwritten, deleted or read. See Settings.
 
+## Speed-ups (Settings → Speed-ups)
+
+Optional extras, each switched on or off on its own (all on by default except "Upload big FTP
+deploys in one go"). Off, the tool works exactly as before.
+
+- **Upload big FTP deploys in one go** (off by default): from a set number of files (50), an FTP
+  deploy goes up as one compressed file plus a small one-time helper that unpacks it on the
+  server: each file to a temporary name, then renamed into place. The helper needs a token,
+  expires after 15 minutes and deletes itself and the bundle. Anything it couldn't write is
+  uploaded one by one as usual. Needs the site address. Off by default because on some shared
+  hosts PHP writes files as another user, and later FTP uploads can't replace them: try it on
+  one deploy first.
+- **Smarter checks after a deploy:** a site's check page can list several pages separated by
+  commas (`/, /login, /api/health`). Each is measured before anything changes and again after;
+  a page that breaks, changes its status or gets much slower is named, with **Roll back** right
+  there.
+- **Three-way view for server edits:** for a file someone changed on the server, one page shows
+  the server edit, what the upload does to it, and which server lines would be lost.
+- **Flag leftover debug code:** the review lists `var_dump`, `print_r`, `dd`, `die`,
+  `console.log`, `debugger` and `phpinfo` in the lines a deploy adds, with file and line.
+- **"Explain this deploy" (AI):** a button on the review asks the AI assistant for a short
+  summary: what changes, risks, database steps and what to check afterwards. Sends the file
+  list and the diffs of the most changed files, only when clicked.
+- **Quick commands in the chat:** `/status`, `/status staging`, `/compare staging`,
+  `/deploy staging`, `/history`, `/help` run at once without the AI: instant, free, and they
+  work while the provider is down. The same AI permissions apply.
+- **Answers appear as they're written:** the assistant's answer shows word by word. Providers
+  that can't stream answer the normal way.
+- **Verify SSH uploads by fingerprint:** after uploading, the server sends git's hash of each
+  file instead of the whole file. Just as exact, far less to transfer. FTP and folder sites
+  still download and compare.
+- **Promote to the next site:** a finished deploy offers to prepare the same commit for the site
+  that gets its code from it (staging → prod). You still review and approve.
+- **Review insights:** the review groups files by folder with lines added and removed, marks
+  risky files (config, `.htaccess`, dependencies, routes, entry points) and opens each file's
+  changes in place with **Preview**.
+- **Spot database changes:** migrations, `.sql` files, module installers and code that creates
+  or alters tables are listed before you prepare a deploy, at the review and at the SQL step.
+- **Check GitHub in the background:** while the dashboard is open it fetches every 10 minutes
+  (and on opening, when the last fetch is older). Branches and files never change.
+- **Fast history:** a small index of past runs in `cache/`, so the dashboard and History stay
+  quick however long the history gets. Rebuilt by itself; deleting it is harmless.
+- **Release notes:** a deploy's page lists the commits it brings, with a "Copy as text" button.
+- **Messages to Slack, Teams or Discord:** paste a channel webhook in Settings → Speed-ups; a
+  short message goes out when a deploy, match or rollback finishes, waits for SQL or fails. The
+  webhook is stored encrypted.
+- **AI backup model** (Settings → AI assistant): when the main model times out or fails, the step
+  is tried once with this one. Blank switches it off.
+
 ## Where the data lives, and cloud backup
 
 - **Storage folder**: everything (settings, sites with their passwords, runs, backups, chats)
@@ -120,6 +169,8 @@ date?", "what changed since the last deploy?", "compare staging and prepare the 
   buttons and nothing happens until you click) or **Off**.
 - **Your instructions** (Settings → AI assistant): house rules in plain words, added to every
   chat, e.g. "Never start an upload unless I say upload".
+- **Notes per local** (Sites → edit a local): facts about that project, added to every chat
+  about it, e.g. "Staging is safe any time; never deploy production on Fridays".
 - Each answer shows the model that wrote it. A router like `openrouter/free` picks a different
   free model per message; one fixed model that is good at tool calling behaves far better.
 - Chats are kept in `storage/chats/`. Runs the assistant starts say so in their log.
@@ -134,4 +185,10 @@ date?", "what changed since the last deploy?", "compare staging and prepare the 
 
 ## Testing
 
-See [TESTING.md](TESTING.md): local test folders, no server involved.
+**Automatic tests:** run `php tests/run.php` from the tool's folder (about 40 seconds). Add a
+word to run only matching tests, e.g. `php tests/run.php bundle`. They use their own throwaway
+data folder, key and local test servers, so they never touch your real data and need no
+internet. Each test file in `tests/` covers one area: uploads, checks, review, the assistant,
+security, secrets, sign-in and history.
+
+**By hand:** see [TESTING.md](TESTING.md): local test folders, no server involved.

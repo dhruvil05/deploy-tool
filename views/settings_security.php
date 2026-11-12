@@ -58,6 +58,9 @@ $exposure = $security['exposure'];
         <dl class="stats">
             <div><dt>Key file</dt><dd><code><?= e($secrets['file']) ?></code><?= $secrets['fromEnv'] ? ' <span class="pill">Set by DEPLOY_TOOL_KEY_FILE</span>' : '' ?></dd></div>
         </dl>
+        <?php if ($broken = \DeployTool\Secrets::brokenKeys()): ?>
+            <p class="notice notice-warning">A damaged key file was set aside as <code><?= e(basename($broken[0])) ?></code> and a new key made, so new passwords stay encrypted. Passwords saved with the damaged key can't be read: type them again, or restore a cloud backup.</p>
+        <?php endif ?>
         <p class="set-callout">Keep this key: without it the saved passwords must be typed again. A cloud backup carries it (encrypted with your passphrase), so a restore on a new computer brings it along.</p>
     <?php else: ?>
         <p class="meta">There is no safe place for the key on this computer<?= $secrets['file'] !== null ? ' (' . e($secrets['file']) . ' could not be used)' : '' ?>, so passwords are kept as plain text in the data folder. Set <code>DEPLOY_TOOL_KEY_FILE</code> in the .env file to a path outside the tool's folder and the data folder, for example <code>C:\Users\you\deploy-tool.key</code>.</p>

@@ -83,6 +83,43 @@ final class Agent
         return null;
     }
 
+    /**
+     * One request to the model. When it fails (a time-out, an overloaded router, an answer that
+     * can't be read) and a backup model is set in Settings → AI assistant, the same request
+     * goes once to the backup model; its answer shows which model wrote it.
+     */
+    private function ask(array &$chat, callable $checkpoint): array
+    {
+        $system = $this->systemPrompt($chat);
+        $history = $this->history($chat);
+        $tools = Tools::allowedDefinitions();
+        // Speed-up "Answers that appear as they're written": the text so far is kept as the
+        // chat's draft (saved at most every 0.4 s), which the page shows while it polls.
+        $saved = 0.0;
+        $onText = static function (string $text) use (&$chat, &$saved, $checkpoint): void {
+            $chat['draft'] = $text;
+            if (microtime(true) - $saved >= 0.4) {
+                $saved = microtime(true);
+                $checkpoint($chat);
+            }
+        };
+        try {
+            return $this->provider->chat($system, $history, $tools, 2048, $onText);
+        } catch (\RuntimeException $e) {
+            $backup = trim((string) ($this->settings['fallback_model'] ?? ''));
+            if ($backup === '' || $backup === $this->settings['model']) {
+                throw $e;
+            }
+            try {
+                return (new Provider(['model' => $backup] + $this->settings))->chat($system, $history, $tools, 2048, $onText);
+            } catch (\RuntimeException $second) {
+                throw new \RuntimeException($e->getMessage() . ' The backup model ' . $backup . ' failed too: ' . $second->getMessage(), 0, $second);
+            }
+        } finally {
+            unset($chat['draft']);
+        }
+    }
+
     /** Whether a call waits for the user: set to "Ask me first", or a production approval (their typed site key). */
     private static function waitsForUser(array $call): bool
     {
@@ -107,7 +144,7 @@ final class Agent
         }
         for ($step = 0; $step < $steps; $step++) {
             try {
-                $reply = $this->provider->chat($this->systemPrompt($chat), $this->history($chat), Tools::allowedDefinitions());
+                $reply = $this->ask($chat, $checkpoint);
             } catch (\RuntimeException $e) {
                 $chat['messages'][] = ['role' => 'assistant', 'content' => $e->getMessage(), 'error' => true, 'at' => time()];
                 return;
@@ -265,6 +302,9 @@ final class Agent
             . ($denied ? "\n- Not allowed, so tell the user where to click and that they can allow it in Settings → AI permissions: " . implode('; ', $denied) . '.' : '');
         $own = trim((string) ($this->settings['instructions'] ?? ''));
         $ownBlock = $own === '' ? '' : "\n\nThe user's own instructions for you (follow them, unless they conflict with the rules above or ask for something not allowed):\n" . $own;
+        // Notes the user keeps on this local (Sites → the local's page): house facts, same weight.
+        $notes = trim((string) ($local['ai_notes'] ?? ''));
+        $ownBlock .= $notes === '' ? '' : "\n\nThe user's notes about {$local['name']} (follow them like the instructions above):\n" . $notes;
         return <<<TEXT
             You are the assistant inside "Deploy tool", a web app on this computer that deploys PHP projects from git to servers. You talk with $name. It is $today.
 

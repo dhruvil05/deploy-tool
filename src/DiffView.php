@@ -41,6 +41,40 @@ final class DiffView
         ];
     }
 
+    /**
+     * Speed-up "Three-way view for server edits": of the lines someone added on the server
+     * (expected → server copy), the ones the upload doesn't contain, so they'd be lost.
+     * Blank lines don't count. Returns line number on the server => text.
+     *
+     * @return array{lost: array<int, string>, added: int}
+     */
+    public static function lostServerLines(Git $git, ?string $expected, ?string $server, ?string $upload): array
+    {
+        $kept = array_flip(array_map('trim', preg_split('/\r?\n/', (string) $upload) ?: []));
+        $lost = [];
+        $added = 0;
+        $line = 0;
+        $inHunk = false;
+        foreach (explode("\n", self::text($git, $expected, $server, 0)) as $raw) {
+            if (preg_match('/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/', $raw, $m)) {
+                [$line, $inHunk] = [(int) $m[1], true];
+                continue;
+            }
+            if (!$inHunk || $raw === '' || $raw[0] !== '+') {
+                continue; // header lines, and removed lines (with no context, there are no others)
+            }
+            $text = rtrim(substr($raw, 1), "\r");
+            if (trim($text) !== '') {
+                $added++;
+                if (!isset($kept[trim($text)])) {
+                    $lost[$line] = $text;
+                }
+            }
+            $line++;
+        }
+        return ['lost' => $lost, 'added' => $added];
+    }
+
     /** git's unified diff of two versions (null = no file). */
     public static function text(Git $git, ?string $before, ?string $after, int $context = 3): string
     {

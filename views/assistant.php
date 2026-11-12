@@ -16,6 +16,9 @@ use DeployTool\Http;
 use DeployTool\View;
 
 $suggestions = ['What changed since the last deploy?', 'Is staging up to date?', 'Compare staging with its commit', 'Summarise this week\'s history'];
+if (\DeployTool\Settings::on('feature_quick_commands')) {
+    array_push($suggestions, '/status', '/help'); // quick commands: instant, no AI
+}
 ?>
 <?php if (!$enabled): ?>
     <div class="card empty-state">

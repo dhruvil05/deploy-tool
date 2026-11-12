@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace DeployTool;
 
+use DeployTool\Ai\Explain;
+
 /** Deploys, compares, rollbacks, history. */
 final class RunController
 {
@@ -26,6 +28,7 @@ final class RunController
             'run-sql-done' => $this->sqlDone(),
             'run-rollback' => $this->rollback(),
             'run-diff' => $this->diff(),
+            'run-explain' => $this->explain(),
             'run-export' => $this->export(),
             'history' => $this->history(),
             'backup-download' => $this->backupDownload(),
@@ -242,7 +245,6 @@ final class RunController
     {
         $run = $this->run((string) ($_GET['id'] ?? ''));
         $path = (string) ($_GET['path'] ?? '');
-        $kind = ($_GET['kind'] ?? '') === 'server' ? 'server' : 'change';
         $file = null;
         foreach ($run['files'] as $candidate) {
             if ($candidate['path'] === $path) {
@@ -253,20 +255,79 @@ final class RunController
         if ($file === null) {
             Http::deny(404, 'That file is not part of this run.');
         }
-
         $git = Sources::git(RunStore::source($run));
-        [$before, $after, $labels] = DiffView::sides($run, $file, $kind, $git);
-
         $options = [
             'view' => ($_GET['view'] ?? '') === 'split' ? 'split' : 'unified',
             'ctx' => in_array($_GET['ctx'] ?? '', ['10', 'all'], true) ? (string) $_GET['ctx'] : '3',
         ];
-        $text = DiffView::text($git, $before, $after, $options['ctx'] === 'all' ? 1000000 : (int) $options['ctx']);
 
+        // Speed-up "Three-way view for server edits": what was edited on the server, what the
+        // upload does to it, and which of the server's lines it would lose.
+        if (($_GET['kind'] ?? '') === 'three' && self::hasThreeWay($run, $file)) {
+            $expected = $git->fileAt($run['from'], $path);
+            $server = Backup::get($run['id'], $path);
+            $upload = $file['action'] === 'upload' ? $git->fileAt($run['to'], $path) : null;
+            View::render('diff_three', [
+                'page' => 'history',
+                'run' => $run,
+                'path' => $path,
+                'lost' => DiffView::lostServerLines($git, $expected, $server, $upload),
+                'serverPart' => View::partial('diff', $this->diffData($run, $file, 'server', $git, $options, true)),
+                'changePart' => View::partial('diff', $this->diffData($run, $file, 'change', $git, $options, true)),
+            ], 'Three-way: ' . basename($path));
+            return;
+        }
+
+        $data = $this->diffData($run, $file, ($_GET['kind'] ?? '') === 'server' ? 'server' : 'change', $git, $options, ($_GET['embed'] ?? '') === '1');
+        if ($data['embed']) {
+            // Review page → Preview (speed-up "Review insights"): only the changes, no page around them.
+            echo View::partial('diff', $data);
+            exit;
+        }
+        View::render('diff', $data, 'Changes in ' . basename($path));
+    }
+
+    /**
+     * Review → "Explain this deploy" (speed-up, AI): a short review written by the AI provider,
+     * saved with the run so it shows again on reload (JSON).
+     */
+    private function explain(): void
+    {
+        Http::requirePost();
+        session_write_close();
+        set_time_limit(180);
+        if (!Explain::available()) {
+            Http::json(['ok' => false, 'error' => 'Switch on the AI assistant and "Explain this deploy" in Settings first.'], 404);
+        }
+        $run = $this->run((string) ($_POST['id'] ?? ''));
+        try {
+            $explanation = Explain::run($run);
+        } catch (\RuntimeException $e) {
+            Http::json(['ok' => false, 'error' => $e->getMessage()]);
+        }
+        $fresh = RunStore::load($run['id']); // the run may have moved on meanwhile; only add this
+        $fresh['explanation'] = $explanation;
+        RunStore::save($fresh);
+        Http::json(['ok' => true, 'html' => View::partial('run_explain', ['run' => $fresh])]);
+    }
+
+    /** Whether a run's file gets the three-way view: a deploy file edited on the server. */
+    public static function hasThreeWay(array $run, array $file): bool
+    {
+        return Settings::on('feature_three_way') && $run['type'] === 'deploy' && $run['from'] !== null && ($file['server'] ?? '') === 'edited';
+    }
+
+    /** What the diff view needs for one file and kind (change or server). */
+    private function diffData(array $run, array $file, string $kind, Git $git, array $options, bool $embed): array
+    {
+        $path = $file['path'];
+        [$before, $after, $labels] = DiffView::sides($run, $file, $kind, $git);
+        $text = DiffView::text($git, $before, $after, $options['ctx'] === 'all' ? 1000000 : (int) $options['ctx']);
         $paths = array_column($run['files'], 'path');
         $index = (int) array_search($path, $paths, true);
-        View::render('diff', [
+        return [
             'page' => 'history',
+            'embed' => $embed,
             'run' => $run,
             'file' => $file,
             'path' => $path,
@@ -281,7 +342,7 @@ final class RunController
             'position' => [$index + 1, count($paths)],
             'prevPath' => $paths[$index - 1] ?? null,
             'nextPath' => $paths[$index + 1] ?? null,
-        ], 'Changes in ' . basename($path));
+        ];
     }
 
     private function export(): void
@@ -320,7 +381,7 @@ final class RunController
     private function history(): void
     {
         Backup::packOldFolders(); // backups saved before zips existed
-        $all = RunStore::all();
+        $all = RunStore::summaries();
         $filters = [
             'type' => (string) ($_GET['type'] ?? ''),
             'local' => (string) ($_GET['local'] ?? ''),

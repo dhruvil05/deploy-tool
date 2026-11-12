@@ -110,7 +110,16 @@ $providerNotes = [
                 </div>
                 <datalist id="ai-model-list"></datalist>
                 <p class="help js-ai-models-status">Type a model name, or load the provider's list and pick one. Test uses the details on this page, saved or not.</p>
+                <?php if (preg_match('#(^openrouter/(auto|free)$|:free$)#i', $ai['model'])): ?>
+                    <p class="warning-text">A free or router model changes from message to message and often times out or cuts answers short. For dependable tool use, pick one fixed model, or at least set a backup below.</p>
+                <?php endif ?>
                 <?= $error('ai_model') ?>
+            </div>
+            <div class="field<?= $hasError('ai_fallback_model') ?>">
+                <label for="ai_fallback_model">Backup model <span class="meta">optional · speed-up</span></label>
+                <input type="text" id="ai_fallback_model" name="ai_fallback_model" value="<?= e($ai['fallback_model']) ?>" list="ai-model-list" class="mono-input" spellcheck="false" placeholder="blank: no backup">
+                <p class="help">When the model above times out or fails, that step is tried once more with this one, so a chat doesn't stop on a busy provider. Same provider and key. Blank switches it off.</p>
+                <?= $error('ai_fallback_model') ?>
             </div>
             <div class="ai-test-result js-ai-test-result" aria-live="polite"></div>
         </section>

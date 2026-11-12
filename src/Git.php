@@ -74,6 +74,23 @@ final class Git
         return $changes;
     }
 
+    /**
+     * Lines added and removed per file between two commits (one git call).
+     *
+     * @return array<string, array{0: ?int, 1: ?int}> path => [added, removed]; null for binary files
+     */
+    public function numstat(string $from, string $to): array
+    {
+        $stats = [];
+        $parts = explode("\0", rtrim($this->okRaw(['diff', '--numstat', '--no-renames', '--no-ext-diff', '-z', $from, $to]), "\0"));
+        foreach ($parts as $part) {
+            if (preg_match('/^(\d+|-)\t(\d+|-)\t(.+)$/s', $part, $m)) {
+                $stats[$m[3]] = [$m[1] === '-' ? null : (int) $m[1], $m[2] === '-' ? null : (int) $m[2]];
+            }
+        }
+        return $stats;
+    }
+
     /** @return array<string, array{sha: string, size: int}> every file in a commit */
     public function tree(string $commit): array
     {

@@ -52,6 +52,7 @@ final class Ai
             'base_url' => self::PRESETS['openrouter'][1],
             'api_key' => '',
             'model' => '',
+            'fallback_model' => '',
             'max_steps' => '8',
             'max_messages' => '40',
             'instructions' => '',

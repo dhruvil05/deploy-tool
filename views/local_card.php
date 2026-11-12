@@ -9,7 +9,7 @@ use DeployTool\Http;
 
 $source = $local['source'];
 ?>
-<section class="card local-card" data-ref="<?= e('local:' . $source['key']) ?>" data-commit="<?= e($local['commit']['sha'] ?? '') ?>">
+<section class="card local-card js-local-card" data-ref="<?= e('local:' . $source['key']) ?>" data-commit="<?= e($local['commit']['sha'] ?? '') ?>"<?php if (\DeployTool\Settings::on('feature_auto_fetch') && empty($local['error'])): ?> data-auto-fetch="<?= e($source['key']) ?>" data-last-fetch="<?= (int) ($local['last_fetch'] ?? 0) ?>"<?php endif ?>>
     <p class="card-label">
         Local · <strong><?= e($source['name']) ?></strong> · <?= e($source['branch']) ?>
         <a class="card-edit" href="index.php?r=source-edit&amp;key=<?= e(urlencode($source['key'])) ?>">Edit</a>

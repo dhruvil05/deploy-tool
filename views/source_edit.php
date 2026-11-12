@@ -55,6 +55,14 @@ $global = ProtectedPaths::global();
             <?= $error('remote') ?>
         </div>
     </div>
+    <?php if (\DeployTool\Ai::allowed()): ?>
+        <div class="field ai-notes<?= $hasError('ai_notes') ?>">
+            <label for="ai_notes">Notes for the AI assistant <span class="meta">optional</span></label>
+            <textarea id="ai_notes" name="ai_notes" rows="3" maxlength="2000" placeholder="For example: staging database changes go through phpMyAdmin. Never deploy on Friday evenings. The client calls prod &quot;live&quot;."><?= e($source['ai_notes']) ?></textarea>
+            <p class="help">Added to every chat about this local, so you don't have to repeat them. Blank adds nothing.</p>
+            <?= $error('ai_notes') ?>
+        </div>
+    <?php endif ?>
 </form>
 
 <section class="card settings-card section protect-card js-protect" aria-labelledby="protect-title">

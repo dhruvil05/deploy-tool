@@ -14,6 +14,7 @@ final class Controller
         match ($route) {
             'dashboard' => $this->dashboard(),
             'fetch' => $this->fetch(),
+            'fetch-quiet' => $this->fetchQuiet(),
             'sites' => $this->sites(),
             'site-edit' => $this->siteEdit(),
             'site-save' => $this->siteSave(),
@@ -62,7 +63,7 @@ final class Controller
             $local = ['source' => $sources[$key], 'error' => $e->getMessage()];
         }
 
-        $runs = RunStore::all();
+        $runs = RunStore::summaries();
         $openRuns = RunStore::open($runs);
         CloudBackup::maybeStart(); // the daily cloud backup, in the background, when one is due
         foreach ($openRuns as $run) {
@@ -101,6 +102,26 @@ final class Controller
             Http::flash('danger', $e->getMessage());
         }
         Http::redirect();
+    }
+
+    /**
+     * Speed-up "Check GitHub in the background": the dashboard's own fetch, then the local's
+     * card drawn again (JSON). Like Fetch, it changes no branch or file.
+     */
+    private function fetchQuiet(): void
+    {
+        Http::requirePost();
+        session_write_close();
+        $source = Sources::get((string) ($_POST['source'] ?? ''));
+        if ($source === null || !Settings::on('feature_auto_fetch')) {
+            Http::json(['ok' => false], 404);
+        }
+        try {
+            Sources::git($source)->fetch($source['remote']);
+            Http::json(['ok' => true, 'html' => View::partial('local_card', ['local' => LocalStatus::collect($source)])]);
+        } catch (\RuntimeException $e) {
+            Http::json(['ok' => false, 'error' => $e->getMessage()]);
+        }
     }
 
     private function sites(): void

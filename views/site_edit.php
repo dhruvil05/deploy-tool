@@ -80,9 +80,12 @@ $types = [
                 <?= $error('url') ?>
             </div>
             <div class="field<?= $hasError('check_path') ?>">
-                <label for="check_path">Check page</label>
-                <input type="text" id="check_path" name="check_path" value="<?= e($site['check_path']) ?>" placeholder="/login">
-                <p class="help">Loaded after every deploy; it must answer HTTP 200 without PHP errors. Leave blank to skip the check.</p>
+                <?php $smartChecks = \DeployTool\Settings::on('feature_smart_checks'); ?>
+                <label for="check_path"><?= $smartChecks ? 'Check pages' : 'Check page' ?></label>
+                <input type="text" id="check_path" name="check_path" value="<?= e($site['check_path']) ?>" placeholder="<?= $smartChecks ? '/login, /admin/dashboard' : '/login' ?>">
+                <p class="help"><?= $smartChecks
+                    ? 'Loaded before and after every deploy; each must answer HTTP 200 without PHP errors, and a page that breaks or gets much slower is named. Separate several with commas (up to 10). Blank skips the check.'
+                    : 'Loaded after every deploy; it must answer HTTP 200 without PHP errors. Leave blank to skip the check.' ?></p>
                 <?= $error('check_path') ?>
             </div>
         </section>

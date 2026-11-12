@@ -148,6 +148,16 @@ try {
             }
         }
         dt_answer($out, ['errors' => (object) $errors, 'deleted' => $deleted]);
+    } elseif ($op === 'hash') {
+        // git's blob hash of each file (null when it isn't there): verifying uploads this way
+        // sends 40 characters per file back instead of the whole file.
+        $hashes = [];
+        foreach ($request['paths'] as $path) {
+            $full = dt_path($root, $path);
+            $contents = is_file($full) ? @file_get_contents($full) : false;
+            $hashes[] = $contents === false ? null : dt_blob($contents);
+        }
+        dt_answer($out, ['hashes' => $hashes]);
     } elseif ($op === 'fingerprint') {
         // Same list as the fingerprint helper: blob hash, hash without Windows line
         // endings ("-" when there are none), size, path. Protected folders are never read.

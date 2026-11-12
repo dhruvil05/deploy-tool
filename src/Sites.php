@@ -496,8 +496,9 @@ final class Sites
         } elseif ($site['url'] === '' && $site['type'] === 'ftp') {
             $errors['url'] = 'Enter the site address, starting with https://';
         }
-        if ($site['check_path'] !== '' && !str_starts_with($site['check_path'], '/')) {
-            $errors['check_path'] = 'Start the page with /, for example /admin/authentication';
+        $checkPaths = array_filter(array_map('trim', preg_split('/[\s,]+/', $site['check_path']) ?: []));
+        if (array_filter($checkPaths, static fn (string $path): bool => !str_starts_with($path, '/'))) {
+            $errors['check_path'] = 'Start each page with /, for example /admin/authentication (several: separate them with commas).';
         }
 
         if (!$errors) {

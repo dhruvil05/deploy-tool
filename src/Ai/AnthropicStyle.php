@@ -57,6 +57,67 @@ final class AnthropicStyle
     }
 
     /** @return array{text: string, calls: list<array{id: string, name: string, arguments: array}>, stop: string, model: ?string, usage: array{in: int, out: int, cost: ?float}} */
+    /** A streamed answer being put together (Provider::stream). */
+    public static function streamStart(): array
+    {
+        return ['text' => '', 'blocks' => [], 'stop' => null, 'model' => null, 'in' => 0, 'out' => 0];
+    }
+
+    /**
+     * One streamed event into $state. Returns whether new text arrived. Blocks start with
+     * their type (text, or tool_use with id and name), then grow by deltas; a tool's input
+     * arrives as pieces of JSON.
+     */
+    public static function streamEvent(array &$state, array $event): bool
+    {
+        switch ($event['type'] ?? '') {
+            case 'error':
+                throw new \RuntimeException('The provider answered with an error: ' . ($event['error']['message'] ?? 'unknown'));
+            case 'message_start':
+                $state['model'] = $event['message']['model'] ?? $state['model'];
+                $state['in'] = (int) ($event['message']['usage']['input_tokens'] ?? 0);
+                return false;
+            case 'content_block_start':
+                $block = (array) ($event['content_block'] ?? []);
+                $state['blocks'][(int) ($event['index'] ?? count($state['blocks']))] = ($block['type'] ?? '') === 'tool_use'
+                    ? ['type' => 'tool_use', 'id' => (string) ($block['id'] ?? ''), 'name' => (string) ($block['name'] ?? ''), 'json' => '']
+                    : ['type' => 'text', 'text' => (string) ($block['text'] ?? '')];
+                return false;
+            case 'content_block_delta':
+                $i = (int) ($event['index'] ?? 0);
+                $delta = (array) ($event['delta'] ?? []);
+                if (($delta['type'] ?? '') === 'input_json_delta') {
+                    $state['blocks'][$i]['json'] = ($state['blocks'][$i]['json'] ?? '') . (string) ($delta['partial_json'] ?? '');
+                    return false;
+                }
+                if (($delta['type'] ?? '') === 'text_delta' && ($delta['text'] ?? '') !== '') {
+                    $state['blocks'][$i]['text'] = ($state['blocks'][$i]['text'] ?? '') . $delta['text'];
+                    $state['text'] = implode("\n\n", array_column(array_filter($state['blocks'], static fn (array $b): bool => $b['type'] === 'text'), 'text'));
+                    return true;
+                }
+                return false;
+            case 'message_delta':
+                $state['stop'] = $event['delta']['stop_reason'] ?? $state['stop'];
+                $state['out'] = (int) ($event['usage']['output_tokens'] ?? $state['out']);
+                return false;
+        }
+        return false;
+    }
+
+    /** The streamed answer in the normal (non-streamed) shape, for reply(). */
+    public static function streamAnswer(array $state): array
+    {
+        ksort($state['blocks']);
+        return [
+            'model' => $state['model'],
+            'stop_reason' => $state['stop'],
+            'usage' => ['input_tokens' => $state['in'], 'output_tokens' => $state['out']],
+            'content' => array_values(array_map(static fn (array $b): array => $b['type'] === 'tool_use'
+                ? ['type' => 'tool_use', 'id' => $b['id'], 'name' => $b['name'], 'input' => json_decode($b['json'] !== '' ? $b['json'] : '{}', true) ?: []]
+                : ['type' => 'text', 'text' => $b['text']], $state['blocks'])),
+        ];
+    }
+
     public static function reply(array $answer): array
     {
         $text = [];

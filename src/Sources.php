@@ -17,6 +17,7 @@ final class Sources
         'branch' => '',
         'remote' => 'origin',
         'extra_protected' => '',
+        'ai_notes' => '',
     ];
 
     public static function all(): array
@@ -88,7 +89,11 @@ final class Sources
                 [ProtectedPaths::class, 'normalize'],
                 preg_split('/\r?\n/', (string) ($input['extra_protected'] ?? ''))
             ))),
+            'ai_notes' => trim(str_replace("\r\n", "\n", (string) ($input['ai_notes'] ?? ''))),
         ];
+        if (strlen($source['ai_notes']) > 2000) {
+            return [['ai_notes' => 'Keep the notes under 2,000 characters.'], $source];
+        }
 
         $errors = [];
         if (!preg_match('/^[a-z0-9][a-z0-9-]{1,39}$/', $source['key'])) {
