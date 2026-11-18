@@ -34,6 +34,10 @@ $lists = [
     'missing' => ['Missing on server', 'In the commit, not on the server.'],
     'extra' => ['Extra on server', 'On the server, not in the commit. Never deleted by the tool.'],
 ];
+$canDelete = !$run['recorded'] && empty($run['production']) && \DeployTool\Settings::on('feature_delete_extras') && empty(\DeployTool\Sites::get($run['site'])['production'] ?? false);
+if ($canDelete) {
+    $lists['extra'][1] = 'On the server, not in the commit. Only the ones you tick are deleted, by "Make it match".';
+}
 $hidden = '<input type="hidden" name="_csrf" value="' . e(Http::csrfToken()) . '"><input type="hidden" name="id" value="' . e($run['id']) . '">';
 
 // Files "Make it match" can upload get a checkbox (part of #sync-form): different and
@@ -47,19 +51,22 @@ $ticked = $savedTicks !== null
 
 // The ticked files as a folder tree (RunView::pathTree). A folder's checkbox ticks every
 // file in it (the script sets its state from the files); only file checkboxes are sent.
+// Speed-up "Delete extra server files": extra files get boxes too (name delete[], none ticked).
 $renderTree = static function (array $node, string $list, bool $checked, bool $open, string $prefix = '') use (&$renderTree, $savedTicks): string {
     $html = '';
-    foreach ($node['dirs'] as $name => $child) {
-        $folder = $prefix . $name . '/';
+    $name = $list === 'extra' ? 'delete[]' : 'files[]';
+    foreach ($node['dirs'] as $dir => $child) {
+        $folder = $prefix . $dir . '/';
         $html .= '<li><details class="tree-dir"' . ($open ? ' open' : '') . '><summary>'
             . '<input type="checkbox" class="js-tree-dir" aria-label="Tick every file in ' . e($folder) . '"' . ($checked ? ' checked' : '') . '>'
-            . '<span class="tree-name">' . e($name) . '/</span><span class="pill">' . $child['count'] . '</span></summary>'
+            . '<span class="tree-name">' . e((string) $dir) . '/</span><span class="pill">' . $child['count'] . '</span></summary>'
             . '<ul class="tree">' . $renderTree($child, $list, $checked, $open, $folder) . '</ul></details></li>';
     }
-    foreach ($node['files'] as $name => $path) {
+    foreach ($node['files'] as $file => $path) {
+        $ticked = $list === 'extra' ? false : ($savedTicks !== null ? isset($savedTicks[$path]) : $checked);
         $html .= '<li class="tree-file"><label class="checkbox">'
-            . '<input type="checkbox" form="sync-form" name="files[]" value="' . e($path) . '" data-list="' . e($list) . '"' . (($savedTicks !== null ? isset($savedTicks[$path]) : $checked) ? ' checked' : '') . '>'
-            . '<span class="tree-name" title="' . e($path) . '">' . e((string) $name) . '</span></label></li>';
+            . '<input type="checkbox" form="sync-form" name="' . $name . '" value="' . e($path) . '" data-list="' . e($list) . '"' . ($ticked ? ' checked' : '') . '>'
+            . '<span class="tree-name" title="' . e($path) . '">' . e((string) $file) . '</span></label></li>';
     }
     return $html;
 };
@@ -159,8 +166,18 @@ $renderTree = static function (array $node, string $list, bool $checked, bool $o
                             </li>
                         <?php endforeach ?>
                     </ul>
-                    <p class="meta">Every path:</p>
+                    <?php if (!$canDelete): ?><p class="meta">Every path:</p><?php endif ?>
                 <?php endif ?>
+                <?php if ($key === 'extra' && $canDelete): ?>
+                    <div class="check-tools delete-tools">
+                        <span class="meta">Usually files deleted in git but left on the server. <strong>Ticked files are deleted</strong> by "Make it match", after a backup; nothing is ticked to start with.</span>
+                        <button type="button" class="small js-check-all" data-list="extra" data-checked="1">Tick all</button>
+                        <button type="button" class="small js-check-all" data-list="extra" data-checked="0">Untick all</button>
+                    </div>
+                    <ul class="tree tree-root delete-tree">
+                        <?= $renderTree(RunView::pathTree($result['extra']), 'extra', false, count($result['extra']) <= 50) ?>
+                    </ul>
+                <?php else: ?>
                 <ul class="path-list">
                     <?php foreach (array_slice($result[$key], 0, 500) as $path): ?>
                         <li><code><?= e($path) ?></code></li>
@@ -170,11 +187,15 @@ $renderTree = static function (array $node, string $list, bool $checked, bool $o
                     <p class="meta">Showing 500. The export has all of them.</p>
                 <?php endif ?>
                 <?php endif ?>
+                <?php endif ?>
                 <p class="meta result-none js-result-none" hidden>No path in this list matches the filter.</p>
             </details>
         <?php endif ?>
     <?php endforeach ?>
     </div>
+
+    <?php // Speed-up "Files of each commit": the commits from the server's recorded version to this one, each as a tree. ?>
+    <?= RunView::commitFiles($run, $run['server_commit'] ?? null) ?>
 
     <?php if ($run['recorded']): ?>
         <div class="notice notice-success section">Commit <?= e(short_sha($run['to'])) ?> was recorded as this server's version.</div>
@@ -188,8 +209,15 @@ $renderTree = static function (array $node, string $list, bool $checked, bool $o
                 <?= $hidden ?>
                 <input type="hidden" name="pick" value="1">
                 <h3>Make it match</h3>
-                <p class="meta">Uploads the files ticked above from the commit, with the usual review, backup and verify, then records the version. Extra files stay.</p>
+                <?php if ($canDelete && $result['extra']): ?>
+                    <p class="meta">Uploads the files ticked above from the commit and deletes the extra files you ticked, with the usual review, backup and verify, then records the version. Unticked extra files stay.</p>
+                <?php else: ?>
+                    <p class="meta">Uploads the files ticked above from the commit, with the usual review, backup and verify, then records the version. Extra files stay.</p>
+                <?php endif ?>
                 <p class="meta"><strong class="js-pick-count"><?= $ticked ?></strong> of <?= $issues + count($result['eol']) ?> file(s) ticked.</p>
+                <?php if ($canDelete && $result['extra']): ?>
+                    <p class="meta delete-count"><strong class="js-delete-count">0</strong> of <?= count($result['extra']) ?> extra file(s) ticked to delete.</p>
+                <?php endif ?>
                 <button type="submit" class="primary">Prepare the upload</button>
             </form>
             <form method="post" action="index.php?r=compare-record" class="card">

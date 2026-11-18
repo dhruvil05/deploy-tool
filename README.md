@@ -112,6 +112,22 @@ deploys in one go"). Off, the tool works exactly as before.
   work while the provider is down. The same AI permissions apply.
 - **Answers appear as they're written:** the assistant's answer shows word by word. Providers
   that can't stream answer the normal way.
+- **Files of each commit:** the dashboard ("Files in this commit", and "What a pull brings" when
+  GitHub is ahead), the compare page and deploy/match pages list the commits involved, each with
+  the files it changed as a folder tree. Click a file to see its changes under it. With several
+  commits each gets its own tree; with no recorded server version, the target commit's own
+  files. Loaded only when opened. A commit with malware markers never has its files opened.
+- **Delete extra server files with "Make it match":** on a compare of a non-production site,
+  **Extra on server** (usually files deleted in git but left on the server) gets tick boxes,
+  none ticked. "Make it match" deletes the ticked ones with the usual review (where you can
+  still untick the delete), backup first and **Roll back**. Protected paths are skipped and
+  production never deletes. Normal deploys already delete files removed in git between the
+  server's recorded version and the new commit.
+- **Pull from GitHub:** when GitHub has commits your local doesn't, the dashboard offers
+  **Pull N commits**. It fetches, then only fast-forwards: it refuses with uncommitted changes,
+  another branch checked out, or when both sides have new commits (merge those yourself). It
+  stops before any file changes when GitHub's commit has malware markers (the same check as
+  Fetch), and runs no git hooks, so a pulled commit can't run code on this computer.
 - **Verify SSH uploads by fingerprint:** after uploading, the server sends git's hash of each
   file instead of the whole file. Just as exact, far less to transfer. FTP and folder sites
   still download and compare.
@@ -166,7 +182,10 @@ date?", "what changed since the last deploy?", "compare staging and prepare the 
   "Messages kept per chat" in Settings cap that. Ollama or LM Studio on this computer cost
   nothing but need a model that is good at tool calling.
 - **AI permissions** (Settings): each action is **Allow**, **Ask** (the chat shows Allow / Deny
-  buttons and nothing happens until you click) or **Off**.
+  buttons and nothing happens until you click) or **Off**. **Pull from GitHub** (Ask by default)
+  lets the assistant pull the chat's local, the same safe way as the dashboard's Pull button:
+  fast-forward only, stopped by malware on GitHub, no git hooks. It needs the "Pull from GitHub"
+  speed-up switched on.
 - **Your instructions** (Settings → AI assistant): house rules in plain words, added to every
   chat, e.g. "Never start an upload unless I say upload".
 - **Notes per local** (Sites → edit a local): facts about that project, added to every chat

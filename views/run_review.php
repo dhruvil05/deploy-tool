@@ -38,7 +38,7 @@ $buttonLabel = match (true) {
     <h2>Review</h2>
     <div class="metrics">
         <div class="metric"><p class="metric-label"><?= $isRollback ? 'Put back' : 'Upload' ?></p><p class="metric-value"><?= count($uploads) ?></p><p class="metric-label"><?= $isRollback ? 'from backup' : "$new new · " . (count($uploads) - $new) . ' changed' ?></p></div>
-        <div class="metric"><p class="metric-label">Delete</p><p class="metric-value"><?= count($deletes) ?></p><p class="metric-label"><?= $isRollback ? 'added by the deploy' : ($run['production'] ? 'listed only on prod' : 'removed in git') ?></p></div>
+        <div class="metric"><p class="metric-label">Delete</p><p class="metric-value"><?= count($deletes) ?></p><p class="metric-label"><?= $isRollback ? 'added by the deploy' : ($run['production'] ? 'listed only on prod' : ($run['type'] === 'sync' ? 'extra files you ticked' : 'removed in git')) ?></p></div>
         <?php if (!$isRollback): ?>
             <div class="metric"><p class="metric-label">Backed up</p><p class="metric-value"><?= $backedUp ?></p><p class="metric-label">server copies saved</p></div>
             <div class="metric"><p class="metric-label">Skipped</p><p class="metric-value"><?= count($run['skipped']) ?></p><p class="metric-label">protected paths</p></div>
@@ -151,7 +151,7 @@ $buttonLabel = match (true) {
                 <p class="meta"><?= count($deletes) ?> file(s) were removed in git. Prod never deletes automatically; they're in the export list for you to decide.</p>
             <?php else: ?>
                 <label class="checkbox"><input type="checkbox" name="approve_deletes" value="1" checked>
-                    <span>Also delete the <?= count($deletes) ?> file(s) removed in git (their copies are in the backup)</span></label>
+                    <span>Also delete the <?= count($deletes) ?> <?= $run['type'] === 'sync' ? 'extra file(s) you ticked on the compare' : 'file(s) removed in git' ?> (their copies are in the backup)</span></label>
             <?php endif ?>
         <?php endif ?>
 

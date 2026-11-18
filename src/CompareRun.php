@@ -98,9 +98,14 @@ final class CompareRun
      * $selected limits it to the paths ticked on the result (null = every different or
      * missing file); only paths the compare listed count, whatever the form sends.
      */
-    public static function createSync(array $compare, ?array $selected, bool $includeLineEndings = false): array
+    /**
+     * "Make it match": a run that uploads the ticked files from the commit and, with the
+     * speed-up "Delete extra server files", deletes the ticked extra ones ($deletes).
+     */
+    public static function createSync(array $compare, ?array $selected, bool $includeLineEndings = false, array $deletes = []): array
     {
         $site = Sites::get($compare['site']) ?? throw new \RuntimeException('This site no longer exists.');
+        $deleting = self::deletesFor($compare, $site, $deletes);
         $wanted = $selected === null ? null : array_flip(array_map('strval', $selected));
         $pick = static fn (string $path, bool $byDefault): bool => $wanted === null ? $byDefault : isset($wanted[$path]);
         $files = [];
@@ -119,6 +124,9 @@ final class CompareRun
                 $files[] = ['path' => (string) $path, 'change' => 'changed'];
             }
         }
+        foreach ($deleting as $path) {
+            $files[] = ['path' => $path, 'change' => 'deleted'];
+        }
         if ($files === [] && $selected !== null && ($compare['result']['differs'] || $compare['result']['missing'] || $compare['result']['eol'])) {
             throw new \RuntimeException('No file is ticked. Tick the files to upload, or use "Record version" instead.');
         }
@@ -126,6 +134,33 @@ final class CompareRun
             throw new \RuntimeException('Nothing to upload: the server already matches. Use "Record version" instead.');
         }
         return DeployRun::create($site, 'sync', null, $files, $compare['to'], $compare['id']);
+    }
+
+    /**
+     * The ticked extra files a match may delete: only files this compare found on the server
+     * and not in the commit, never on production, and only with the speed-up switched on.
+     * Protected paths are skipped later, like every run's files.
+     *
+     * @return string[]
+     */
+    public static function deletesFor(array $compare, array $site, array $deletes): array
+    {
+        $deletes = array_values(array_unique(array_filter($deletes, 'is_string')));
+        if ($deletes === []) {
+            return [];
+        }
+        if (!Settings::on('feature_delete_extras')) {
+            throw new \RuntimeException('Deleting extra files is switched off (Settings → Speed-ups).');
+        }
+        if (!empty($site['production'])) {
+            throw new \RuntimeException('Production never deletes files automatically. Delete them on the server yourself.');
+        }
+        $extra = array_flip(array_map('strval', $compare['result']['extra'] ?? []));
+        $unknown = array_filter($deletes, static fn (string $path): bool => !isset($extra[$path]));
+        if ($unknown !== []) {
+            throw new \RuntimeException('Only files listed under "Extra on server" can be deleted: ' . implode(', ', array_slice($unknown, 0, 3)) . '.');
+        }
+        return $deletes;
     }
 
     /**
@@ -215,6 +250,15 @@ final class CompareRun
 
     private static function analyze(array &$run, RunContext $context): void
     {
+        // Speed-up "Files of each commit": the version the server says it runs, so the compare
+        // page can list the commits between it and the compared one. Only a note: never fails.
+        if (Settings::on('feature_commit_files') && !array_key_exists('server_commit', $run)) {
+            try {
+                $run['server_commit'] = ServerState::parse(ServerState::readRaw($context->transport()))['commit'] ?? null;
+            } catch (\Throwable) {
+                $run['server_commit'] = null;
+            }
+        }
         $regexes = $context->protectedRegexes();
         $tree = array_filter($context->git()->tree($run['to']), static fn ($path): bool => !ProtectedPaths::matches((string) $path, $regexes), ARRAY_FILTER_USE_KEY);
         $server = $run['server'];

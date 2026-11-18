@@ -121,6 +121,33 @@ final class RunView
         return self::sortAndMerge($root);
     }
 
+    /**
+     * Speed-up "Files of each commit": the section listing the commits from $from (the
+     * server's version) to the run's commit, each with its file tree. Empty when switched off
+     * or the run's local is gone.
+     */
+    public static function commitFiles(array $run, ?string $from): string
+    {
+        if (!Settings::on('feature_commit_files') || empty($run['to'])) {
+            return '';
+        }
+        try {
+            $source = RunStore::source($run);
+        } catch (\RuntimeException) {
+            return '';
+        }
+        $from = $from !== $run['to'] ? $from : null;
+        return View::partial('commit_files_box', [
+            'source' => $source['key'],
+            'from' => $from,
+            'to' => $run['to'],
+            'title' => 'Commits and their files',
+            'help' => $from !== null
+                ? 'What each commit from the server\'s version ' . short_sha($from) . ' to ' . short_sha($run['to']) . ' changed.'
+                : 'What commit ' . short_sha($run['to']) . ' changed.',
+        ]);
+    }
+
     private static function sortAndMerge(array $node): array
     {
         $dirs = [];

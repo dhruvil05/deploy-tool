@@ -232,6 +232,48 @@
         });
     });
 
+    // Speed-up "Files of each commit": a commits section loads when first opened, and a file
+    // in its tree opens its changes underneath. Delegated, so a dashboard card that is drawn
+    // again (background fetch) keeps working.
+    const loadInto = async (url, target, failure) => {
+        try {
+            const response = await fetch(url, { headers: { Accept: 'text/html' } });
+            if (!response.ok) {
+                throw new Error();
+            }
+            target.innerHTML = await response.text(); // escaped by the server's template
+        } catch (error) {
+            target.innerHTML = '<p class="error-text">' + failure + '</p>';
+        }
+    };
+    document.addEventListener('toggle', (event) => {
+        const box = event.target;
+        if (!(box instanceof HTMLDetailsElement) || !box.matches('.js-commit-files') || !box.open || box.dataset.loaded) {
+            return;
+        }
+        box.dataset.loaded = '1';
+        loadInto(box.dataset.url, box.querySelector('.commit-files-body'), 'Could not load the commits. Reload the page to try again.');
+    }, true);
+    document.addEventListener('click', (event) => {
+        const button = event.target.closest('.js-commit-file');
+        if (!button) {
+            return;
+        }
+        const item = button.closest('li');
+        const open = item.querySelector(':scope > .commit-file-diff');
+        if (open) {
+            open.remove();
+            button.setAttribute('aria-expanded', 'false');
+            return;
+        }
+        const panel = document.createElement('div');
+        panel.className = 'commit-file-diff diff-preview';
+        panel.innerHTML = '<p class="meta">Loading the changes…</p>';
+        item.append(panel);
+        button.setAttribute('aria-expanded', 'true');
+        loadInto(button.dataset.url, panel, 'Could not load the changes.');
+    });
+
     // Dashboard: "Gets code from" saves as soon as it changes (production sites ask first).
     document.querySelectorAll('form.js-source').forEach((form) => {
         const select = form.querySelector('select');
@@ -604,14 +646,21 @@
     // shows a part-ticked state; whole lists can be ticked too. Keeps "N of M ticked" up to date.
     const syncForm = document.getElementById('sync-form');
     if (syncForm) {
-        const boxes = [...document.querySelectorAll('input[form="sync-form"][name="files[]"]')];
+        // Upload boxes are files[]; with the speed-up "Delete extra server files", the extra
+        // files' boxes are delete[] and counted on their own.
+        const boxes = [...document.querySelectorAll('input[form="sync-form"][name="files[]"], input[form="sync-form"][name="delete[]"]')];
         const folders = [...document.querySelectorAll('.js-tree-dir')].map((box) => ({
             box,
-            files: [...box.closest('details').querySelectorAll('input[name="files[]"]')],
+            files: [...box.closest('details').querySelectorAll('input[name="files[]"], input[name="delete[]"]')],
         }));
         const count = syncForm.querySelector('.js-pick-count');
+        const deleteCount = syncForm.querySelector('.js-delete-count');
         const update = () => {
-            count.textContent = boxes.filter((box) => box.checked).length;
+            count.textContent = boxes.filter((box) => box.checked && box.name === 'files[]').length;
+            if (deleteCount) {
+                deleteCount.textContent = boxes.filter((box) => box.checked && box.name === 'delete[]').length;
+                deleteCount.closest('p').classList.toggle('is-deleting', deleteCount.textContent !== '0');
+            }
             for (const { box, files } of folders) {
                 const ticked = files.filter((file) => file.checked).length;
                 box.checked = ticked === files.length;
@@ -760,7 +809,7 @@
                 let shown = 0;
                 const files = [...section.querySelectorAll('.tree-file')];
                 files.forEach((item) => {
-                    item.hidden = !matches(item.querySelector('input[name="files[]"]').value);
+                    item.hidden = !matches(item.querySelector('input[type="checkbox"]').value);
                     shown += item.hidden ? 0 : 1;
                 });
                 [...section.querySelectorAll('.tree-dir')].reverse().forEach((dir) => {

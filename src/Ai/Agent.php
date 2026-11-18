@@ -274,6 +274,7 @@ final class Agent
         // What the user allowed in Settings → AI permissions, and where they click for the rest.
         $where = [
             'fetch' => '"Fetch from GitHub" on the dashboard',
+            'pull' => '"Pull N commits" on the dashboard',
             'compare' => '"Compare" on the site\'s card on the dashboard',
             'prepare' => '"Deploy" on the site\'s card, or "Make it match" on a compare\'s page',
             'review_files' => 'the tick boxes on the compare\'s page',

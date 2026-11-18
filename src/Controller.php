@@ -15,6 +15,9 @@ final class Controller
             'dashboard' => $this->dashboard(),
             'fetch' => $this->fetch(),
             'fetch-quiet' => $this->fetchQuiet(),
+            'pull' => $this->pull(),
+            'commit-files' => $this->commitFiles(),
+            'commit-diff' => $this->commitDiff(),
             'sites' => $this->sites(),
             'site-edit' => $this->siteEdit(),
             'site-save' => $this->siteSave(),
@@ -122,6 +125,84 @@ final class Controller
         } catch (\RuntimeException $e) {
             Http::json(['ok' => false, 'error' => $e->getMessage()]);
         }
+    }
+
+    /** Speed-up "Pull from GitHub": a fast-forward-only pull that stops on malware (CommitFiles::pull). */
+    private function pull(): void
+    {
+        Http::requirePost();
+        $source = Sources::get((string) ($_POST['source'] ?? ''));
+        if ($source === null || !Settings::on('feature_git_pull')) {
+            Http::deny(404, 'Local not found.');
+        }
+        try {
+            Http::flash('success', CommitFiles::pull($source));
+        } catch (\RuntimeException $e) {
+            Http::flash('danger', $e->getMessage());
+        }
+        Http::redirect('local=' . urlencode($source['key']));
+    }
+
+    /** Speed-up "Files of each commit": the commits from..to with their file trees (HTML part). */
+    private function commitFiles(): void
+    {
+        [$source, $git] = $this->commitSource();
+        $to = self::commitParam($git, 'to');
+        $from = isset($_GET['from']) ? self::commitParam($git, 'from') : null;
+        try {
+            $data = CommitFiles::between($git, $from, $to);
+            echo View::partial('commit_files', ['source' => $source['key'], 'commitData' => $data, 'fromGiven' => $from !== null]);
+        } catch (\RuntimeException $e) {
+            echo '<p class="error-text">' . e($e->getMessage()) . '</p>';
+        }
+        exit;
+    }
+
+    /** One file's changes in one commit (HTML part, opened under the file in the tree). */
+    private function commitDiff(): void
+    {
+        [, $git] = $this->commitSource();
+        $sha = self::commitParam($git, 'sha');
+        $path = (string) ($_GET['path'] ?? '');
+        if (!in_array($path, array_column(CommitFiles::filesOf($git, $sha), 1), true)) {
+            Http::deny(404, 'That file is not part of this commit.');
+        }
+        // Never read malware into this computer's temp files, where Defender would flag it.
+        if (Safety::malwareFindings($git, $sha) !== []) {
+            echo '<p class="error-text">This commit has malware markers, so its changes are not opened here.</p>';
+            exit;
+        }
+        $diff = CommitFiles::diff($git, $sha, $path);
+        if ($diff['binary']) {
+            echo '<p class="meta">A binary file (an image, font or archive): its changes can\'t be shown as text.</p>';
+        } elseif ($diff['rows'] === []) {
+            echo '<p class="meta">No changes in the text (only the file\'s permissions changed).</p>';
+        } else {
+            echo '<p class="meta commit-diff-stats"><span class="added">+' . $diff['added'] . '</span> <span class="removed">−' . $diff['removed'] . '</span></p>'
+                . View::partial('diff_unified', ['rows' => $diff['rows']]);
+        }
+        exit;
+    }
+
+    /** @return array{0: array, 1: Git} the local named in ?source=, for the commit file views */
+    private function commitSource(): array
+    {
+        session_write_close();
+        $source = Sources::get((string) ($_GET['source'] ?? ''));
+        if ($source === null || !Settings::on('feature_commit_files')) {
+            Http::deny(404, 'Local not found.');
+        }
+        return [$source, Sources::git($source)];
+    }
+
+    /** A full commit sha from the query string that the local's repository has. */
+    private static function commitParam(Git $git, string $name): string
+    {
+        $sha = (string) ($_GET[$name] ?? '');
+        if (preg_match('/^[0-9a-f]{40}$/', $sha) !== 1 || $git->resolve($sha) === null) {
+            Http::deny(404, 'That commit is not in this local\'s repository.');
+        }
+        return $sha;
     }
 
     private function sites(): void

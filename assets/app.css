@@ -1122,3 +1122,42 @@ input.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2
 .chat-model code { font-size: 11px; }
 .ai-instructions { margin-top: 4px; }
 .ai-instructions textarea, .ai-notes textarea { width: 100%; min-height: 120px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; resize: vertical; }
+
+/* Speed-up "Files of each commit": commits with their file trees, and Pull on the dashboard. */
+.fetch-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
+.fetch-row .fetch-form { margin-top: 0; }
+.local-commit-files { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.commit-files-panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+.commit-files-panel > summary { padding: 9px 12px; cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.commit-files-panel > summary .section-title { font-size: 14px; font-weight: 600; }
+.commit-files-panel > summary .section-help { flex-basis: auto; padding-left: 0; font-size: 12.5px; color: var(--muted); }
+.commit-files-panel .commit-files-body { padding: 0 12px 12px; }
+.commit-files-note { margin: 8px 0 10px; }
+.commit-file-list { display: flex; flex-direction: column; gap: 8px; }
+.commit-block { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.commit-block > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 8px 12px; cursor: pointer; }
+.commit-block[open] > summary { border-bottom: 1px solid var(--border); }
+.commit-sha { font-family: var(--mono); font-size: 12.5px; color: var(--accent); }
+.commit-subject { font-weight: 500; overflow-wrap: anywhere; }
+.commit-meta { margin: 0; font-size: 12px; }
+.commit-block > summary .pill { margin-left: auto; }
+.commit-block .commit-tree, .commit-block > .meta { margin: 8px 12px 10px; }
+.commit-tree { max-height: 460px; }
+.commit-file { padding-left: 18px !important; }
+.commit-file-button {
+    display: inline-flex; align-items: center; gap: 6px; padding: 1px 6px; margin-left: -6px; border: 1px solid transparent; border-radius: 6px;
+    background: none; color: var(--text); font: inherit; cursor: pointer; text-align: left;
+}
+.commit-file-button:hover { background: var(--neutral-bg); border-color: var(--border); }
+.commit-file-button[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.commit-file-button .badge { font-size: 11px; padding: 0 6px; }
+.commit-file-diff { margin: 6px 0 8px; border: 1px solid var(--border); border-radius: var(--radius); max-height: 380px; }
+.commit-file-diff > .meta, .commit-file-diff > .error-text { margin: 8px 10px; }
+.commit-diff-stats { margin: 0 !important; padding: 6px 10px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; }
+.commit-diff-stats .added { color: var(--success); }
+.commit-diff-stats .removed { color: var(--danger); }
+
+/* Speed-up "Delete extra server files": ticked extra files are deleted by "Make it match". */
+.delete-tools strong { color: var(--danger); }
+.delete-tree input[type="checkbox"]:checked + .tree-name { color: var(--danger); text-decoration: line-through; }
+.delete-count.is-deleting strong { color: var(--danger); }

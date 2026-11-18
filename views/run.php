@@ -126,6 +126,11 @@ $showFiles = $run['files'] && $run['status'] !== 'review';
     <?php endif ?>
 <?php endif ?>
 
+<?php // Speed-up "Files of each commit": what the commits of this deploy or match changed, as trees. ?>
+<?php if (in_array($run['type'], ['deploy', 'sync'], true)): ?>
+    <?= RunView::commitFiles($run, $run['type'] === 'deploy' ? $run['from'] : (\DeployTool\ServerState::parse($run['prev_state_raw'] ?? null)['commit'] ?? null)) ?>
+<?php endif ?>
+
 <?php if (!empty($run['site_check'])): ?>
     <div class="notice notice-<?= $run['site_check']['ok'] ? ($run['site_check']['skipped'] ? 'info' : 'success') : 'danger' ?>">
         Site check: <?= e($run['site_check']['message']) ?>

@@ -37,6 +37,7 @@ final class DeployRun
         'unexpected' => ['Already on server', 'warning'],
         'edited' => ['Edited on server', 'warning'],
         'not_found' => ['Missing on server', 'warning'],
+        'extra' => ['On server', 'neutral'],
     ];
 
     public static function create(array $site, string $type, ?string $baseline = null, array $syncFiles = [], ?string $syncTo = null, ?string $compareId = null): array
@@ -524,6 +525,9 @@ final class DeployRun
 
     private static function serverState(string $type, string $change, ?string $server, ?string $expected): string
     {
+        if ($type === 'sync' && $change === 'deleted') { // an extra file ticked to delete
+            return $server === null ? 'not_found' : 'extra';
+        }
         if ($type === 'sync') {
             return $server === null ? 'missing' : 'present';
         }

@@ -28,7 +28,7 @@ $url = static function (array $changes) use ($run, $path, $kind, $options): stri
     return 'index.php?' . e(http_build_query($query));
 };
 $actions = ['upload' => ['Upload', 'info'], 'delete' => ['Delete', 'danger'], 'restore' => ['Restore', 'info']];
-$changes = ['new' => 'new file', 'changed' => 'changed', 'deleted' => 'removed in git'];
+$changes = ['new' => 'new file', 'changed' => 'changed', 'deleted' => $run['type'] === 'sync' ? 'extra on server' : 'removed in git'];
 [$actionLabel, $actionStyle] = $actions[$file['action']] ?? [$file['action'], 'neutral'];
 $folder = str_contains($path, '/') ? substr($path, 0, strrpos($path, '/') + 1) : '';
 $total = $diff['added'] + $diff['removed'];
@@ -119,21 +119,5 @@ $cell = static function (?array $row, string $side): string {
         </table>
     </div>
 <?php else: ?>
-    <div class="diff-wrap">
-        <table class="diff-table">
-            <colgroup><col class="col-ln"><col class="col-ln"><col></colgroup>
-            <?php foreach ($diff['rows'] as $row): ?>
-                <?php if ($row['type'] === 'hunk' || $row['type'] === 'note'): ?>
-                    <tr class="hunk"><td colspan="3"><?= $row['html'] !== '' ? $row['html'] : '…' ?></td></tr>
-                <?php else: ?>
-                    <?php $type = $row['type'] === 'ctx' ? '' : ' ' . $row['type']; ?>
-                    <tr>
-                        <td class="ln<?= $type ?>"><?= $row['old'] ?? '' ?></td>
-                        <td class="ln<?= $type ?>"><?= $row['new'] ?? '' ?></td>
-                        <td class="code<?= $type ?>"><span class="sign"><?= ['add' => '+', 'del' => '−'][$row['type']] ?? ' ' ?></span><?= $row['html'] ?><?= !empty($row['eol']) ? ' <span class="eol-tag">line ending</span>' : '' ?></td>
-                    </tr>
-                <?php endif ?>
-            <?php endforeach ?>
-        </table>
-    </div>
+    <?= \DeployTool\View::partial('diff_unified', ['rows' => $diff['rows']]) ?>
 <?php endif ?>

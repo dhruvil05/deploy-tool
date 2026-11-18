@@ -110,7 +110,8 @@ final class RunController
         $compare = $this->run((string) ($_POST['id'] ?? ''));
         try {
             $selected = !empty($_POST['pick']) ? array_values(array_filter((array) ($_POST['files'] ?? []), 'is_string')) : null;
-            $run = CompareRun::createSync($compare, $selected, !empty($_POST['include_eol']));
+            $deletes = array_values(array_filter((array) ($_POST['delete'] ?? []), 'is_string'));
+            $run = CompareRun::createSync($compare, $selected, !empty($_POST['include_eol']), $deletes);
         } catch (\RuntimeException $e) {
             Http::flash('danger', $e->getMessage());
             Http::redirect('r=run&id=' . urlencode($compare['id']));

@@ -28,6 +28,7 @@ final class Ai
      */
     public const PERMISSIONS = [
         'fetch' => ['Fetch from GitHub', "Downloads the chat's local's latest commits. Your branches and files don't change.", true, 'safe', false],
+        'pull' => ['Pull from GitHub', "Brings GitHub's new commits into the chat's local's folder, like Pull on the dashboard: only a fast-forward, never with uncommitted changes or a merge, stopped before any file changes when GitHub's commit has malware markers, and no git hooks run. Changes files on this computer, never on a server.", 'ask', 'safe', false],
         'compare' => ['Start compares', 'Reads a server and compares it with a commit. On FTP sites a small helper file is uploaded and removed again.', true, 'safe', false],
         'prepare' => ['Prepare deploys and "Make it match"', "Runs the checks and backs up the server's files, then stops at the review. Nothing on the server changes.", true, 'safe', false],
         'review_files' => ['Tick and untick files', 'Changes the ticks on a compare, or leaves files out of a run waiting for review. Starts nothing.', true, 'safe', false],
@@ -58,7 +59,7 @@ final class Ai
             'instructions' => '',
         ];
         foreach (self::PERMISSIONS as $key => [, , $on]) {
-            $defaults['perm_' . $key] = $on ? '1' : '0';
+            $defaults['perm_' . $key] = $on === 'ask' ? 'ask' : ($on ? '1' : '0');
         }
         return $defaults;
     }

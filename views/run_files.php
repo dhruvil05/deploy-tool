@@ -18,7 +18,7 @@ $preview ??= false;
 
 $warningPaths = $run['type'] === 'rollback' ? [] : array_column(DeployRun::warnings($run), 'path');
 $actionLabels = ['upload' => ['Upload', 'info'], 'delete' => ['Delete', 'danger'], 'restore' => ['Restore', 'info']];
-$changeLabels = ['new' => 'new', 'changed' => 'changed', 'deleted' => 'removed in git'];
+$changeLabels = ['new' => 'new', 'changed' => 'changed', 'deleted' => $run['type'] === 'sync' ? 'extra on server' : 'removed in git'];
 ?>
 <?php if ($filters): ?>
     <div class="filters" role="group" aria-label="Filter files">

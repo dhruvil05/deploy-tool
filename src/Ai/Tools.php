@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DeployTool\Ai;
 
 use DeployTool\Ai;
+use DeployTool\CommitFiles;
 use DeployTool\CompareRun;
 use DeployTool\DeployRun;
 use DeployTool\DiffView;
@@ -83,6 +84,7 @@ final class Tools
                 'seconds' => ['type' => 'integer', 'description' => '5 to 90. Default 60.'],
             ], 'required' => ['run_id']]],
             ['name' => 'fetch_local', 'description' => "Fetches the latest commits of this chat's local from GitHub, then reports how it compares. The user's branches and files don't change.", 'parameters' => []],
+            ['name' => 'pull_local', 'description' => "Pulls GitHub's new commits into this chat's local's folder (fetches first). Only a fast-forward: it refuses when files are uncommitted, another branch is checked out, or both sides have new commits (the user merges those in their git tool), and it stops before anything changes when GitHub's commit has malware markers. Use it when the user asks to pull or update the local, after telling them how many commits it brings.", 'parameters' => []],
             ['name' => 'confirm_sql_done', 'description' => 'Finishes a deploy that is waiting at the SQL step, once the user says the database changes are done or not needed.', 'parameters' => ['properties' => ['run_id' => ['type' => 'string']], 'required' => ['run_id']]],
             ['name' => 'retry_run', 'description' => 'Runs a failed deploy, match, rollback or compare again from where it stopped. Not for production sites. Follow with wait_for_run.', 'parameters' => ['properties' => ['run_id' => ['type' => 'string']], 'required' => ['run_id']]],
             ['name' => 'prepare_rollback', 'description' => "Prepares a rollback of a finished deploy or match: it puts back the server's files from that run's backup. It stops at the review like a deploy. Follow with wait_for_run.", 'parameters' => ['properties' => ['run_id' => ['type' => 'string', 'description' => 'The deploy or match to undo.']], 'required' => ['run_id']]],
@@ -143,6 +145,7 @@ final class Tools
     /** action => the permission it needs (Ai::PERMISSIONS); actions not listed only read. */
     public const NEEDS = [
         'fetch_local' => 'fetch',
+        'pull_local' => 'pull',
         'start_compare' => 'compare',
         'prepare_deploy' => 'prepare',
         'prepare_match' => 'prepare',
@@ -164,7 +167,8 @@ final class Tools
     /** The actions offered to the model: every read, and the rest only when allowed. */
     public static function allowedDefinitions(): array
     {
-        return array_values(array_filter(self::definitions(), static fn (array $tool): bool => !isset(self::NEEDS[$tool['name']]) || Ai::can(self::NEEDS[$tool['name']])));
+        return array_values(array_filter(self::definitions(), static fn (array $tool): bool => (!isset(self::NEEDS[$tool['name']]) || Ai::can(self::NEEDS[$tool['name']]))
+            && ($tool['name'] !== 'pull_local' || Settings::on('feature_git_pull'))));
     }
 
     /**
@@ -208,6 +212,7 @@ final class Tools
             }
             [$data, $link] = match ($name) {
                 'fetch_local' => [self::fetchLocal(), 'index.php'],
+                'pull_local' => [self::pullLocal(), 'index.php'],
                 'confirm_sql_done' => self::confirmSqlDone(self::text($arguments, 'run_id')),
                 'retry_run' => self::retryRun(self::text($arguments, 'run_id')),
                 'prepare_rollback' => self::prepareRollback(self::text($arguments, 'run_id')),
@@ -310,7 +315,7 @@ final class Tools
         // "Prepared a deploy to X" becomes "Prepare a deploy to X" for the Allow / Deny question.
         $verbs = ['Left out' => 'Leave out', 'Prepared' => 'Prepare', 'Started' => 'Start', 'Approved' => 'Approve', 'Marked' => 'Mark',
             'Retried' => 'Retry', 'Recorded' => 'Record', 'Cancelled' => 'Cancel', 'Protected' => 'Protect', 'Added' => 'Add',
-            'Changed' => 'Change', 'Fetched' => 'Fetch', 'Put back' => 'Put back'];
+            'Changed' => 'Change', 'Fetched' => 'Fetch', 'Pulled' => 'Pull', 'Put back' => 'Put back'];
         foreach ($verbs as $past => $now) {
             if (str_starts_with($done, $past)) {
                 return $now . substr($done, strlen($past));
@@ -338,6 +343,7 @@ final class Tools
             'set_compare_ticks' => 'Changed the ticks on compare ' . (string) ($arguments['compare_run_id'] ?? '?'),
             'approve_run' => 'Approved run ' . (string) ($arguments['run_id'] ?? '?'),
             'fetch_local' => 'Fetched from GitHub',
+            'pull_local' => 'Pulled from GitHub',
             'confirm_sql_done' => 'Marked the SQL step done',
             'retry_run' => 'Retried run ' . (string) ($arguments['run_id'] ?? '?'),
             'prepare_rollback' => 'Prepared a rollback of run ' . (string) ($arguments['run_id'] ?? '?'),
@@ -557,6 +563,20 @@ final class Tools
         $source = Sources::get((string) self::$local) ?? throw new \RuntimeException('This chat has no local to fetch.');
         Sources::git($source)->fetch($source['remote']);
         return ['fetched' => "{$source['remote']}/{$source['branch']}"] + self::localStatus($source['key']);
+    }
+
+    /**
+     * Pull from GitHub (AI permission "pull", speed-up "Pull from GitHub"): the dashboard's
+     * fast-forward-only pull, with its malware stop and no git hooks (CommitFiles::pull).
+     */
+    private static function pullLocal(): array
+    {
+        if (!Settings::on('feature_git_pull')) {
+            throw new \RuntimeException('Pull is switched off in Settings → Speed-ups ("Pull from GitHub on the dashboard"). Tell the user to pull in their own git tool, or switch it on.');
+        }
+        $source = Sources::get((string) self::$local) ?? throw new \RuntimeException('This chat has no local to pull.');
+        $result = CommitFiles::pull($source);
+        return ['result' => $result] + self::localStatus($source['key']);
     }
 
     /** @return array{0: array, 1: string} */
