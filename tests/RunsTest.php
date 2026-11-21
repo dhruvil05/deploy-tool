@@ -76,6 +76,7 @@ test('chats: renaming works again and again, and survives an older copy being sa
 
 test('speed-ups: every switch exists, defaults are as documented', function () {
     foreach (array_keys(Settings::FEATURES) as $feature) {
-        check(Settings::on($feature) === ($feature !== 'feature_bundle_upload'), "$feature is " . ($feature === 'feature_bundle_upload' ? 'off' : 'on') . ' by default');
+        $off = in_array($feature, ['feature_bundle_upload', 'feature_discord_bridge', 'feature_slack_bridge'], true);
+        check(Settings::on($feature) === !$off, "$feature is " . ($off ? 'off' : 'on') . ' by default');
     }
 });
