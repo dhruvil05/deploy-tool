@@ -37,6 +37,8 @@ final class Settings
         'feature_debug_flags' => ['Flag leftover debug code', 'The review lists debug calls in the lines a deploy adds (var_dump, print_r, dd, die, console.log, debugger, phpinfo), with file and line, so they don\'t reach a live site.', 'Off: no debug-code check.'],
         'feature_commit_files' => ['Files of each commit', 'The dashboard, compare and run pages show the commits involved, each with the files it changed as folders; click a file to see its changes. Several commits get one tree each.', 'Off: no commit file trees.'],
         'feature_delete_extras' => ['Delete extra server files with "Make it match"', 'On a compare of a non-production site, "Extra on server" gets tick boxes (none ticked): the ticked files, usually ones deleted in git but left on the server, are deleted by "Make it match", after a backup, with the usual review and Roll back. Production never deletes.', 'Off: extra files always stay.'],
+        'feature_discord_bridge' => ['Chat with the assistant from Discord', 'A Discord bot you create reads one channel: start a chat there with !new and ask in its thread; the answer comes back to Discord. It may act as far as AI permissions and the choice below allow, asking for your ✅ first; approving a production deploy is always done in the tool. Only the Discord users listed below are answered. Off by default; set it up below.', 'Off: Discord is never read.'],
+        'feature_slack_bridge' => ['Chat with the assistant from Slack', 'A Slack app you create reads one channel over a connection the tool opens to Slack (Socket Mode): start a chat there with !new and ask in its thread; the answer comes back to Slack. It may act as far as AI permissions and the choice below allow, asking for your ✅ first; approving a production deploy is always done in the tool. Only the Slack members listed below are answered. Off by default; set it up below.', 'Off: Slack is never read.'],
         'feature_git_pull' => ['Pull from GitHub on the dashboard', 'When GitHub has commits your local doesn\'t, the dashboard offers Pull. It only fast-forwards (no merges), refuses with uncommitted changes, stops before any file changes when GitHub\'s commit has malware markers, and runs no git hooks.', 'Off: pull in your own git tool.'],
         'feature_streaming' => ["Answers appear as they're written", "The assistant's answer shows word by word while the model writes it, instead of all at once at the end. Providers that can't stream answer the normal way.", 'Off: the whole answer appears when it is done.'],
         'feature_quick_commands' => ['Quick commands in the chat', 'Messages starting with / (/status, /status staging, /compare staging, /deploy staging, /history, /help) run at once, without the AI: instant, free, and they work while the provider is down. Same AI permissions as the assistant.', 'Off: every message goes to the AI.'],
@@ -51,7 +53,7 @@ final class Settings
             str_starts_with($field, 'ai_perm_') => 'permissions',
             str_starts_with($field, 'cloud_') => 'cloud',
             str_starts_with($field, 'ai_') => 'ai',
-            str_starts_with($field, 'feature_'), in_array($field, ['notify_webhook', 'bundle_min_files'], true) => 'speedups',
+            str_starts_with($field, 'feature_'), str_starts_with($field, 'discord_'), str_starts_with($field, 'slack_'), in_array($field, ['notify_webhook', 'bundle_min_files'], true) => 'speedups',
             $field === 'deployer_name' => 'general',
             in_array($field, ['git_path', 'php_path', 'ssh_path'], true) => 'programs',
             $field === 'protected_paths' => 'protected',
@@ -73,9 +75,30 @@ final class Settings
             'protected_paths' => implode("\n", ProtectedPaths::DEFAULTS),
             'notify_webhook' => '',
             'bundle_min_files' => '50',
+            'discord_bot_token' => '',
+            'discord_channel_id' => '',
+            'discord_user_ids' => '',
+            'discord_actions' => 'ask',
+            'slack_bot_token' => '',
+            'slack_app_token' => '',
+            'slack_channel_id' => '',
+            'slack_user_ids' => '',
+            'slack_actions' => 'ask',
             'feature_bundle_upload' => '0', // see FEATURES: try it on one deploy first
+            'feature_discord_bridge' => '0', // needs a Discord bot set up first
+            'feature_slack_bridge' => '0', // needs a Slack app set up first
         ] + array_fill_keys(array_keys(self::FEATURES), '1');
     }
+
+    /** What the assistant may do when you write from Discord: value => [label, explanation]. */
+    public const DISCORD_ACTIONS = [
+        'ask' => ['Ask in Discord before each action', 'What AI permissions allow, but every action waits for your ✅ (or "yes") in Discord, even ones set to Allow. Recommended.'],
+        'same' => ['Same as AI permissions', 'Actions set to Allow run at once; ones set to Ask wait for your ✅ in Discord.'],
+        'read' => ['Only read', 'It looks things up and answers; every action is done in the tool.'],
+    ];
+
+    /** Settings kept encrypted on disk, like passwords; a blank field keeps the saved value. */
+    private const SECRET_FIELDS = ['notify_webhook', 'discord_bot_token', 'slack_bot_token', 'slack_app_token'];
 
     /** Whether an optional speed-up (a key of FEATURES) is switched on. */
     public static function on(string $feature): bool
@@ -85,7 +108,7 @@ final class Settings
 
     public static function all(): array
     {
-        return Secrets::openFields(array_merge(self::defaults(), array_intersect_key(JsonStore::read('settings'), self::defaults())), ['notify_webhook']);
+        return Secrets::openFields(array_merge(self::defaults(), array_intersect_key(JsonStore::read('settings'), self::defaults())), self::SECRET_FIELDS);
     }
 
     public static function get(string $key): string
@@ -114,12 +137,15 @@ final class Settings
         foreach (array_keys(self::FEATURES) as $feature) {
             $values[$feature] = $values[$feature] === '1' ? '1' : '0';
         }
-        // The chat webhook works like a password: a blank field keeps the saved one.
-        if (!empty($input['notify_webhook_remove'])) {
-            $values['notify_webhook'] = '';
-        } elseif ($values['notify_webhook'] === '') {
-            $values['notify_webhook'] = self::get('notify_webhook');
+        // The chat webhook and the Discord bot token work like passwords: a blank field keeps the saved one.
+        foreach (self::SECRET_FIELDS as $secret) {
+            if (!empty($input[$secret . '_remove'])) {
+                $values[$secret] = '';
+            } elseif ($values[$secret] === '') {
+                $values[$secret] = self::get($secret);
+            }
         }
+        $values['discord_user_ids'] = implode(', ', array_unique(preg_split('/[\s,;]+/', $values['discord_user_ids'], -1, PREG_SPLIT_NO_EMPTY) ?: []));
 
         $errors = [];
         if (str_contains($values['protected_paths'], '..')) {
@@ -150,8 +176,40 @@ final class Settings
             $errors['notify_webhook'] = 'Paste the webhook address from Slack, Teams or Discord. It starts with https://';
         }
 
+        if ($values['discord_channel_id'] !== '' && !preg_match('/^\d{15,21}$/', $values['discord_channel_id'])) {
+            $errors['discord_channel_id'] = 'Paste the channel ID: a long number (right-click the channel → Copy Channel ID).';
+        }
+        if ($values['discord_user_ids'] !== '' && !preg_match('/^\d{15,21}(, \d{15,21})*$/', $values['discord_user_ids'])) {
+            $errors['discord_user_ids'] = 'Paste user IDs: long numbers separated by commas (right-click your name → Copy User ID).';
+        }
+        foreach (['discord_actions', 'slack_actions'] as $choice) {
+            if (!isset(self::DISCORD_ACTIONS[$values[$choice]])) {
+                $values[$choice] = 'ask';
+            }
+        }
+        $values['slack_user_ids'] = strtoupper(implode(', ', array_unique(preg_split('/[\s,;]+/', $values['slack_user_ids'], -1, PREG_SPLIT_NO_EMPTY) ?: [])));
+        $values['slack_channel_id'] = strtoupper($values['slack_channel_id']);
+        if ($values['slack_channel_id'] !== '' && !preg_match('/^[CG][A-Z0-9]{8,12}$/', $values['slack_channel_id'])) {
+            $errors['slack_channel_id'] = 'Paste the channel ID, like C0123ABCD (channel name → View channel details, at the bottom).';
+        }
+        if ($values['slack_user_ids'] !== '' && !preg_match('/^[UW][A-Z0-9]{8,12}(, [UW][A-Z0-9]{8,12})*$/', $values['slack_user_ids'])) {
+            $errors['slack_user_ids'] = 'Paste member IDs, like U0123ABCD (your profile → ⋯ → Copy member ID), separated by commas.';
+        }
+        if ($values['slack_bot_token'] !== '' && !Secrets::isSealed($values['slack_bot_token']) && !str_starts_with($values['slack_bot_token'], 'xoxb-')) {
+            $errors['slack_bot_token'] = 'The bot token starts with xoxb- (OAuth & Permissions → Bot User OAuth Token).';
+        }
+        if ($values['slack_app_token'] !== '' && !Secrets::isSealed($values['slack_app_token']) && !str_starts_with($values['slack_app_token'], 'xapp-')) {
+            $errors['slack_app_token'] = 'The app-level token starts with xapp- (Basic Information → App-Level Tokens).';
+        }
+        if ($values['feature_slack_bridge'] === '1' && ($values['slack_bot_token'] === '' || $values['slack_app_token'] === '' || $values['slack_channel_id'] === '' || $values['slack_user_ids'] === '')) {
+            $errors['feature_slack_bridge'] = 'Fill in both tokens, the channel ID and at least one member ID before switching on Slack.';
+        }
+        if ($values['feature_discord_bridge'] === '1' && ($values['discord_bot_token'] === '' || $values['discord_channel_id'] === '' || $values['discord_user_ids'] === '')) {
+            $errors['feature_discord_bridge'] = 'Fill in the bot token, the channel ID and at least one user ID before switching on Discord.';
+        }
+
         if (!$errors && $write) {
-            JsonStore::write('settings', Secrets::sealFields($values, ['notify_webhook']) + self::legacy());
+            JsonStore::write('settings', Secrets::sealFields($values, self::SECRET_FIELDS) + self::legacy());
         }
         return $errors;
     }

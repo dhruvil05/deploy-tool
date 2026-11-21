@@ -196,6 +196,7 @@ h1 { font-size: 22px; font-weight: 600; margin: 0 0 16px; }
 .malware-alert span { font-size: 13px; }
 .warnings { margin: 10px 0 0; padding-left: 18px; color: var(--warning); font-size: 13px; }
 .error-text { margin: 4px 0 0; color: var(--danger); font-size: 13px; }
+.success-text { color: var(--success); }
 .tip { position: relative; display: inline-flex; vertical-align: -3px; margin-left: 6px; color: var(--warning); cursor: help; }
 .tip svg { width: 17px; height: 17px; }
 .tip:focus { outline: 2px solid var(--warning); outline-offset: 2px; border-radius: 4px; }
@@ -1161,3 +1162,19 @@ input.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2
 .delete-tools strong { color: var(--danger); }
 .delete-tree input[type="checkbox"]:checked + .tree-name { color: var(--danger); text-decoration: line-through; }
 .delete-count.is-deleting strong { color: var(--danger); }
+
+/* Speed-up "Chat with the assistant from Discord": its bot settings under Speed-ups. */
+.discord-setup { margin: 20px 0 0; padding: 14px 16px 12px; max-width: 640px; border: 1px solid var(--border); border-radius: var(--radius); }
+.discord-setup legend { padding: 0 6px; font-weight: 600; }
+.discord-setup .field { margin-top: 12px; }
+.discord-test { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 14px; }
+.discord-test .meta { margin: 0; }
+.discord-test a { margin-left: 4px; }
+.discord-status { margin: 12px 0 0; }
+.discord-setup .field-label { display: block; margin-bottom: 6px; font-weight: 600; }
+.discord-actions { display: flex; flex-direction: column; gap: 6px; }
+.radio-card { display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+.radio-card input { margin: 3px 0 0; }
+.radio-card > span { display: flex; flex-direction: column; gap: 2px; }
+.radio-card .meta { margin: 0; font-size: 12.5px; }
+.radio-card:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }

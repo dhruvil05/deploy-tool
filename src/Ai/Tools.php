@@ -498,6 +498,9 @@ final class Tools
         }
         $who = Settings::get('deployer_name') ?: 'the user';
         if (!empty($run['production'])) {
+            if (Ai::$remote !== null) {
+                throw new \RuntimeException("{$run['site_name']} is a production site: approving it is never done from " . Ai::$remote . ". The user opens the run's review page in the tool and types the site key there (run {$run['id']}).");
+            }
             if ($run['type'] === 'rollback') {
                 throw new \RuntimeException("{$run['site_name']} is a production site, so a rollback there is approved on the run's page.");
             }

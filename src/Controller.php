@@ -11,11 +11,16 @@ final class Controller
 {
     public function handle(string $route): void
     {
+        // Speed-ups "Chat with the assistant from Discord / Slack": keep their background processes running.
+        Discord\Bridge::ensure();
+        Slack\Bridge::ensure();
         match ($route) {
             'dashboard' => $this->dashboard(),
             'fetch' => $this->fetch(),
             'fetch-quiet' => $this->fetchQuiet(),
             'pull' => $this->pull(),
+            'discord-test' => $this->discordTest(),
+            'slack-test' => $this->slackTest(),
             'commit-files' => $this->commitFiles(),
             'commit-diff' => $this->commitDiff(),
             'sites' => $this->sites(),
@@ -141,6 +146,75 @@ final class Controller
             Http::flash('danger', $e->getMessage());
         }
         Http::redirect('local=' . urlencode($source['key']));
+    }
+
+    /**
+     * Settings → Speed-ups → Discord → Test connection (JSON): the bot's name, whether it can
+     * read the channel, and the link that adds the bot to a server. Uses the token typed in
+     * the field, or the saved one when it's blank. Nothing is saved.
+     */
+    private function discordTest(): void
+    {
+        Http::requirePost();
+        session_write_close();
+        $token = trim((string) ($_POST['token'] ?? '')) ?: Settings::get('discord_bot_token');
+        $channel = trim((string) ($_POST['channel'] ?? ''));
+        if ($token === '') {
+            Http::json(['ok' => false, 'error' => 'Paste the bot token first.']);
+        }
+        $api = new Discord\Api($token);
+        try {
+            $me = $api->me();
+        } catch (\RuntimeException $e) {
+            Http::json(['ok' => false, 'error' => $e->getMessage()]);
+        }
+        // View Channel, Send Messages, Add Reactions, Read Message History, Create Public Threads, Send Messages in Threads.
+        $invite = 'https://discord.com/oauth2/authorize?' . http_build_query(['client_id' => $me['id'], 'scope' => 'bot', 'permissions' => '309237713984']);
+        $answer = ['ok' => true, 'bot' => (string) ($me['username'] ?? 'bot'), 'invite' => $invite];
+        if ($channel !== '') {
+            try {
+                $found = $api->channel($channel);
+                $answer['channel'] = '#' . (string) ($found['name'] ?? $channel);
+            } catch (\RuntimeException $e) {
+                $answer['ok'] = false;
+                $answer['error'] = $e->getMessage() . ' Add the bot to your server with the link below, then test again.';
+            }
+        }
+        Http::json($answer);
+    }
+
+    /**
+     * Settings → Speed-ups → Slack → Test connection (JSON): the bot's name, whether it is in
+     * the channel, and whether the app-level token can open a Socket Mode connection. Uses the
+     * tokens typed in the fields, or the saved ones when blank. Nothing is saved.
+     */
+    private function slackTest(): void
+    {
+        Http::requirePost();
+        session_write_close();
+        $bot = trim((string) ($_POST['token'] ?? '')) ?: Settings::get('slack_bot_token');
+        $app = trim((string) ($_POST['app_token'] ?? '')) ?: Settings::get('slack_app_token');
+        $channel = strtoupper(trim((string) ($_POST['channel'] ?? '')));
+        if ($bot === '' || $app === '') {
+            Http::json(['ok' => false, 'error' => 'Paste both tokens first: the bot token (xoxb-…) and the app-level token (xapp-…).']);
+        }
+        $api = new Slack\Api($bot, $app);
+        try {
+            $me = $api->whoAmI();
+            $answer = ['ok' => true, 'bot' => (string) ($me['user'] ?? 'bot') . (isset($me['team']) ? ' in ' . $me['team'] : '')];
+            $api->socketUrl(); // proves the app-level token and that Socket Mode is on
+            if ($channel !== '') {
+                $info = $api->channel($channel);
+                $answer['channel'] = '#' . (string) ($info['name'] ?? $channel);
+                if (array_key_exists('is_member', $info) && !$info['is_member']) {
+                    $answer['ok'] = false;
+                    $answer['error'] = "The bot is not in {$answer['channel']} yet: type /invite @{$me['user']} in that channel, then test again.";
+                }
+            }
+        } catch (\RuntimeException $e) {
+            Http::json(['ok' => false, 'error' => $e->getMessage()]);
+        }
+        Http::json($answer);
     }
 
     /** Speed-up "Files of each commit": the commits from..to with their file trees (HTML part). */

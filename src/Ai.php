@@ -70,13 +70,29 @@ final class Ai
         return self::mode($permission) !== 'off';
     }
 
+    /**
+     * Where the user is writing from when it isn't the tool's own page, e.g. 'Discord' (set
+     * by the Discord bridge's process). While set, Settings → Speed-ups → "What it may do
+     * from Discord" narrows AI permissions: only reading, every action asked first (the
+     * default), or the same as in the tool.
+     */
+    public static ?string $remote = null;
+
     /** 'allow' (does it), 'ask' (waits for Allow in the chat) or 'off'. Stored as 1, ask, 0. */
     public static function mode(string $permission, ?array $settings = null): string
     {
-        return match (($settings ?? self::settings())['perm_' . $permission] ?? '0') {
+        $mode = match (($settings ?? self::settings())['perm_' . $permission] ?? '0') {
             '1' => 'allow',
             'ask' => 'ask',
             default => 'off',
+        };
+        if (self::$remote === null || $mode === 'off') {
+            return $mode;
+        }
+        return match (Settings::get(strtolower(self::$remote) . '_actions')) { // discord_actions, slack_actions
+            'same' => $mode,
+            'read' => 'off',
+            default => 'ask',
         };
     }
 

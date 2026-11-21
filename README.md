@@ -194,6 +194,99 @@ date?", "what changed since the last deploy?", "compare staging and prepare the 
   free model per message; one fixed model that is good at tool calling behaves far better.
 - Chats are kept in `storage/chats/`. Runs the assistant starts say so in their log.
 
+### Chatting from Discord
+
+Ask the assistant from Discord (your phone, another computer) and get the answer there, and
+let it act: compare, prepare deploys, approve staging, pull, and so on, as far as AI
+permissions and **What it may do from Discord** allow. By default it asks before every action:
+react ✅ or ❌ under its question, or reply yes / no. Approving a production deploy is always
+done in the tool, where you type the site key.
+
+How it works: a background process on this computer asks Discord every 3 seconds for new
+messages in one channel. Nothing on this computer is opened to the internet, so the tool keeps
+working only from `localhost`. Your computer and Laragon must be on; after a restart, open any
+page of the tool once and the process starts again.
+
+**Set it up (about 5 minutes):**
+
+1. **Create the bot.** Open the [Discord Developer Portal](https://discord.com/developers/applications)
+   → **New Application** → name it (e.g. `Deploy tool`) → **Bot** on the left:
+   - **Reset Token** → copy the token (shown once).
+   - Under **Privileged Gateway Intents**, switch on **Message Content Intent** → **Save**.
+2. **Get the IDs.** In Discord: **User Settings → Advanced → Developer Mode** on. Then
+   right-click the channel the bot should read → **Copy Channel ID**, and right-click your own
+   name → **Copy User ID**. A private server of your own with a `#deploys` channel works well.
+3. **In the tool:** Settings → Speed-ups → **Discord chat**: paste the token, channel ID and
+   user ID, then **Test connection**. It shows the bot's name and an **Add the bot to your
+   server** link: open it, pick your server, **Authorize**. Test again: it should say it can
+   read the channel.
+4. Pick **What it may do from Discord**: **Ask in Discord before each action** (recommended),
+   **Same as AI permissions**, or **Only read**.
+5. Switch on **Chat with the assistant from Discord** and **Save settings**. The status line
+   shows **Running** within a few seconds (reload the page).
+
+A bot added before reactions were used lacks **Add Reactions**: open the **Add the bot to your
+server** link from **Test connection** again, or just reply yes / no to its questions.
+
+**Use it** in that channel:
+
+- `!new nova` starts a chat about the Nova local and opens a thread for it (with one local,
+  just `!new`). In the thread: *is staging up to date?*, *compare staging*, *prepare a deploy
+  to staging*. Before an action it posts **Confirm: …?** with ✅ and ❌: tap one, or reply
+  yes / no. Writing something else instead counts as no.
+- `!status`, `!status staging`, `!history`, `!compare staging`, `!deploy staging` in a thread
+  run at once, without the AI (`!compare` and `!deploy` are refused with **Only read**). A
+  prepared deploy still stops at its review, which you approve by asking in the thread
+  (staging) or on the run's page.
+- `!chats` lists the latest chats and `!open 2` opens a thread for one, so you can continue a
+  chat you started in the tool. The same chats show on the Assistant page.
+- `!help` lists all of this.
+
+**Safety:**
+
+- Only the Discord user IDs you list are answered; anyone else in the channel is ignored.
+- From Discord the assistant never does more than AI permissions allow, and with the default
+  choice every action waits for your ✅. Only reactions and replies from listed user IDs count.
+- Approving a production deploy or match is refused from Discord: open its review page in the
+  tool and type the site key. Production also never deletes files.
+- The bot token is stored encrypted like your FTP passwords, and never appears in messages.
+- Answers leave this computer: the assistant keeps them short and doesn't paste file contents
+  unless you ask. The bot never @mentions anyone.
+- Switching the speed-up off stops the process within seconds. After the tool is updated, the
+  process restarts itself with the new code.
+
+### Chatting from Slack
+
+The same as Discord, in a Slack channel: `!new`, threads, `!status`, the ✅ / ❌ confirm
+(Slack's ✅ and ❌ reactions), and **What it may do from Slack**. The tool keeps a connection
+open to Slack (Socket Mode), so nothing on this computer is opened to the internet.
+
+**Set it up (about 10 minutes).** In a company workspace an admin may have to approve the app.
+
+1. **Create the app.** Open [api.slack.com/apps](https://api.slack.com/apps) → **Create New
+   App** → **From scratch** → name it (e.g. `Deploy tool`) and pick your workspace.
+2. **Socket Mode** (left menu) → switch it on → name the token (e.g. `deploy-tool`) → it gets
+   the `connections:write` scope → **Generate** → copy the **app-level token** (`xapp-…`).
+3. **OAuth & Permissions** → **Bot Token Scopes** → add `chat:write`, `channels:history`,
+   `channels:read`, `reactions:read` and `reactions:write`. For a private channel also
+   `groups:history` and `groups:read`.
+4. **Event Subscriptions** → switch on → **Subscribe to bot events** → add `message.channels`
+   and `reaction_added` (for a private channel also `message.groups`) → **Save Changes**.
+5. **Install App** → **Install to Workspace** → **Allow** → copy the **Bot User OAuth Token**
+   (`xoxb-…`). After changing scopes later, reinstall the app.
+6. In Slack, open the channel and type `/invite @Deploy tool` (your app's name).
+7. Copy the IDs: click the channel's name → the **Channel ID** (`C…`) is at the bottom; your
+   profile picture → **Profile** → **⋯** → **Copy member ID** (`U…`).
+8. **In the tool:** Settings → Speed-ups → **Slack chat**: paste both tokens, the channel ID and
+   your member ID → **Test connection** (it checks both tokens, Socket Mode and the channel) →
+   pick **What it may do from Slack** → switch on **Chat with the assistant from Slack** →
+   **Save settings**. The status line shows **Connected** within a few seconds.
+
+**Use it:** in the channel, `!new shop` posts a 🧵 message and the chat continues in its thread
+(reply in the thread). Everything else works as described for Discord above. The safety rules
+are the same: only your member IDs count, tokens are stored encrypted, production approval
+stays in the tool.
+
 ### Turning it off
 
 - **For now:** untick **Enable AI assistant** in Settings. The menu item and page go away;

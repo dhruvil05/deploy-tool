@@ -232,6 +232,41 @@
         });
     });
 
+    // Settings → Speed-ups → Discord / Slack: "Test connection" checks the tokens and channel
+    // (nothing is saved). The button names its route and which field goes as which value.
+    document.querySelectorAll('.js-remote-test').forEach((button) => button.addEventListener('click', async () => {
+        const result = button.parentElement.querySelector('.js-remote-result');
+        const body = new FormData();
+        body.append('_csrf', token);
+        for (const pair of button.dataset.fields.split(' ')) {
+            const [name, id] = pair.split(':');
+            body.append(name, document.getElementById(id).value);
+        }
+        button.disabled = true;
+        result.textContent = 'Testing…';
+        result.className = 'meta js-remote-result';
+        try {
+            const answer = await (await fetch('index.php?r=' + button.dataset.route, { method: 'POST', body })).json();
+            result.textContent = answer.ok
+                ? `Connected as ${answer.bot}${answer.channel ? ', can read ' + answer.channel : ''}. `
+                : (answer.error || 'It did not work.') + ' ';
+            result.className = 'meta js-remote-result ' + (answer.ok ? 'success-text' : 'error-text');
+            if (answer.invite) {
+                const link = document.createElement('a');
+                link.href = answer.invite;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.textContent = 'Add the bot to your server';
+                result.append(link);
+            }
+        } catch (error) {
+            result.textContent = 'The test could not run. Reload the page and try again.';
+            result.className = 'meta js-remote-result error-text';
+        } finally {
+            button.disabled = false;
+        }
+    }));
+
     // Speed-up "Files of each commit": a commits section loads when first opened, and a file
     // in its tree opens its changes underneath. Delegated, so a dashboard card that is drawn
     // again (background fetch) keeps working.

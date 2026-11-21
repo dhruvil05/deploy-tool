@@ -124,7 +124,7 @@ final class Agent
     private static function waitsForUser(array $call): bool
     {
         return (isset(Tools::NEEDS[$call['name']]) && Ai::mode(Tools::NEEDS[$call['name']]) === 'ask')
-            || Tools::productionApproval($call) !== null;
+            || (Ai::$remote === null && Tools::productionApproval($call) !== null); // from Discord it is refused instead (Tools::approveRun)
     }
 
     /** The index of the assistant message whose actions wait for Allow / Deny, or null. */
@@ -301,6 +301,15 @@ final class Agent
         $permissions = '- Allowed beyond reading: ' . ($allowed ? implode('; ', $allowed) : 'nothing') . '.'
             . ($asks ? "\n- Allowed after the user clicks Allow: " . implode('; ', $asks) . '. Just call the action when they ask for it; the chat then shows them Allow / Deny buttons and you continue with the result. Don\'t ask for permission in words first.' : '')
             . ($denied ? "\n- Not allowed, so tell the user where to click and that they can allow it in Settings → AI permissions: " . implode('; ', $denied) . '.' : '');
+        // Discord bridge: the user writes from another app. Ai::mode() already narrowed the
+        // permissions above to what Settings → Speed-ups allows from there.
+        if (Ai::$remote !== null) {
+            $remote = Ai::$remote;
+            $permissions .= "\n- The user is writing from $remote, not from the tool's page. The permissions above are what is allowed from $remote (set in Settings → Speed-ups → $remote chat); for anything not allowed, tell them where to click in the tool."
+                . "\n- \"Allowed after the user clicks Allow\" means here: just call the action; $remote then asks the user to react ✅ or ❌ (or reply yes / no) and you continue with the result."
+                . "\n- Approving a production deploy or match is never possible from $remote: prepare it if asked, then tell the user to open the run's review page in the tool and type the site key there."
+                . "\n- Your answer is sent to $remote, so it leaves this computer: keep it short (under about 1500 characters), summarise instead of pasting file contents or long diffs unless the user asks for them, and never include passwords, keys or tokens. Links to the tool's pages don't work there: name the run id instead.";
+        }
         $own = trim((string) ($this->settings['instructions'] ?? ''));
         $ownBlock = $own === '' ? '' : "\n\nThe user's own instructions for you (follow them, unless they conflict with the rules above or ask for something not allowed):\n" . $own;
         // Notes the user keeps on this local (Sites → the local's page): house facts, same weight.
