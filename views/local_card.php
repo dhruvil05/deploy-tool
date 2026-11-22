@@ -14,7 +14,7 @@ $source = $local['source'];
         Local · <strong><?= e($source['name']) ?></strong> · <?= e($source['branch']) ?>
         <a class="card-edit" href="index.php?r=source-edit&amp;key=<?= e(urlencode($source['key'])) ?>">Edit</a>
     </p>
-    <p class="meta"><?= e($source['repo_path']) ?></p>
+    <p class="meta local-path"><?= \DeployTool\Sources::isManaged($source) ? 'Copy of ' . e((string) preg_replace('#^(https://|git@|ssh://)#', '', $source['repo_url'])) . ' · kept by the tool' : e($source['repo_path']) ?></p>
 
     <?php if (!empty($local['error'])): ?>
         <p class="error-text"><?= e($local['error']) ?></p>
@@ -57,7 +57,7 @@ $source = $local['source'];
             </ul>
         <?php endif ?>
 
-        <?php $canPull = \DeployTool\Settings::on('feature_git_pull') && $local['remote_commit'] !== null && $local['behind'] > 0; ?>
+        <?php $canPull = \DeployTool\Settings::on('feature_git_pull') && !\DeployTool\Sources::isManaged($source) && $local['remote_commit'] !== null && $local['behind'] > 0; ?>
         <div class="fetch-row">
             <form method="post" action="index.php?r=fetch" class="fetch-form js-busy">
                 <input type="hidden" name="_csrf" value="<?= e(Http::csrfToken()) ?>">

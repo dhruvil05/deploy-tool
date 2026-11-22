@@ -31,7 +31,7 @@ final class RunView
         return match ($run['type']) {
             'rollback' => RollbackRun::PHASES,
             'compare' => CompareRun::phases($run),
-            default => DeployRun::PHASES,
+            default => DeployRun::phases($run),
         };
     }
 

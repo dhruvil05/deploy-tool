@@ -18,3 +18,11 @@ Options -Indexes
     RewriteRule (^|/)\. - [F,L]
     RewriteRule ^router\.php$ - [F,L]
 </IfModule>
+
+# Speed: the pages ask for assets/app.css?v=<time changed>, so a browser may keep them for a
+# year; a new version has a new address. Only with mod_headers (otherwise nothing changes).
+<IfModule mod_headers.c>
+    <If "%{REQUEST_URI} =~ m#/assets/[\w-]+\.(css|js)$#">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </If>
+</IfModule>

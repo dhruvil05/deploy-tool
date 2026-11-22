@@ -14,6 +14,7 @@ final class Controller
         // Speed-ups "Chat with the assistant from Discord / Slack": keep their background processes running.
         Discord\Bridge::ensure();
         Slack\Bridge::ensure();
+        Scheduler::ensure(); // server watch and uptime monitor
         match ($route) {
             'dashboard' => $this->dashboard(),
             'fetch' => $this->fetch(),
@@ -21,6 +22,9 @@ final class Controller
             'pull' => $this->pull(),
             'discord-test' => $this->discordTest(),
             'slack-test' => $this->slackTest(),
+            'watch' => $this->watch(),
+            'watch-check' => $this->watchCheck(),
+            'watch-seen' => $this->watchSeen(),
             'commit-files' => $this->commitFiles(),
             'commit-diff' => $this->commitDiff(),
             'sites' => $this->sites(),
@@ -104,8 +108,7 @@ final class Controller
             Http::deny(404, 'Local not found.');
         }
         try {
-            Sources::git($source)->fetch($source['remote']);
-            Http::flash('success', "Fetched the latest commits for {$source['name']}. Your branches and files were not changed.");
+            Http::flash('success', Sources::fetch($source));
         } catch (\RuntimeException $e) {
             Http::flash('danger', $e->getMessage());
         }
@@ -125,7 +128,14 @@ final class Controller
             Http::json(['ok' => false], 404);
         }
         try {
-            Sources::git($source)->fetch($source['remote']);
+            try {
+                Sources::fetch($source);
+            } catch (\RuntimeException $e) {
+                if (!Sources::isManaged($source)) {
+                    throw $e;
+                }
+                // a managed copy stopped by malware markers: the card below shows them
+            }
             Http::json(['ok' => true, 'html' => View::partial('local_card', ['local' => LocalStatus::collect($source)])]);
         } catch (\RuntimeException $e) {
             Http::json(['ok' => false, 'error' => $e->getMessage()]);
@@ -146,6 +156,38 @@ final class Controller
             Http::flash('danger', $e->getMessage());
         }
         Http::redirect('local=' . urlencode($source['key']));
+    }
+
+    /** Speed-up "Watch servers for changes": a site's latest findings. */
+    private function watch(): void
+    {
+        $site = Sites::get((string) ($_GET['site'] ?? ''));
+        if ($site === null) {
+            Http::deny(404, 'Site not found.');
+        }
+        View::render('watch', ['page' => 'dashboard', 'site' => $site, 'result' => ServerWatch::result($site['key'])], 'Server watch · ' . $site['name']);
+    }
+
+    /** "Check now" on the watch page (also works with the speed-up off, as a one-off look). */
+    private function watchCheck(): void
+    {
+        Http::requirePost();
+        $site = Sites::get((string) ($_POST['site'] ?? ''));
+        if ($site === null) {
+            Http::deny(404, 'Site not found.');
+        }
+        session_write_close();
+        set_time_limit(300);
+        ServerWatch::check($site); // a problem is saved with the result and shown on the page
+        Http::redirect('r=watch&site=' . urlencode($site['key']));
+    }
+
+    private function watchSeen(): void
+    {
+        Http::requirePost();
+        $key = (string) ($_POST['site'] ?? '');
+        ServerWatch::markSeen($key);
+        Http::redirect('r=watch&site=' . urlencode($key));
     }
 
     /**

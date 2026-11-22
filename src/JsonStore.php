@@ -35,13 +35,14 @@ final class JsonStore
     }
 
     /** Writes to a temp file first, so a crash never leaves a half-written file. */
-    public static function writeFile(string $file, array $data): void
+    /** $pretty false: compact, for big files only the tool reads (server snapshots, caches). */
+    public static function writeFile(string $file, array $data, bool $pretty = true): void
     {
         $dir = dirname($file);
         if (!is_dir($dir) && !mkdir($dir, 0700, true) && !is_dir($dir)) {
             throw new \RuntimeException('Could not create ' . $dir);
         }
-        $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
+        $json = json_encode($data, ($pretty ? JSON_PRETTY_PRINT : 0) | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
         if (file_put_contents($file . '.tmp', $json, LOCK_EX) === false || !rename($file . '.tmp', $file)) {
             throw new \RuntimeException('Could not save ' . basename($file));
         }

@@ -28,30 +28,66 @@ $global = ProtectedPaths::global();
     <input type="hidden" name="_csrf" value="<?= e(Http::csrfToken()) ?>">
     <input type="hidden" name="original_key" value="<?= e($originalKey ?? '') ?>">
     <h2>Repository</h2>
+    <?php // Speed-up "Locals from a Git address": the tool keeps its own copy instead of a folder of yours. ?>
+    <?php $remoteLocals = \DeployTool\Settings::on('feature_remote_locals'); $kind = \DeployTool\Sources::isManaged($source) || ($_POST['repo_kind'] ?? '') === 'url' ? 'url' : 'folder'; ?>
     <div class="repo-grid">
-        <div class="field<?= $hasError('name') ?>">
+        <div class="field repo-half<?= $hasError('name') ?>">
             <label for="name">Name</label>
             <input type="text" id="name" name="name" value="<?= e($source['name']) ?>" placeholder="Backoffice" required>
             <?= $error('name') ?>
         </div>
-        <div class="field<?= $hasError('key') ?>">
+        <div class="field repo-half<?= $hasError('key') ?>">
             <label for="key">Key <span class="meta">can't change later</span></label>
             <input type="text" id="key" name="key" value="<?= e($source['key']) ?>" placeholder="backoffice" <?= $originalKey !== null ? 'readonly' : 'required' ?>>
             <?= $error('key') ?>
         </div>
-        <div class="field repo-path<?= $hasError('repo_path') ?>">
+        <?php if ($remoteLocals): ?>
+            <fieldset class="repo-kind">
+                <legend class="field-label">Where is the code?</legend>
+                <div class="repo-kind-cards js-repo-kinds">
+                    <label class="radio-card repo-kind-card">
+                        <input type="radio" name="repo_kind" value="folder"<?= $kind === 'folder' ? ' checked' : '' ?>>
+                        <span class="repo-kind-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg></span>
+                        <span><strong>Folder on this computer</strong><span class="meta">A git checkout you already work in, e.g. in C:\laragon\www.</span></span>
+                    </label>
+                    <label class="radio-card repo-kind-card">
+                        <input type="radio" name="repo_kind" value="url"<?= $kind === 'url' ? ' checked' : '' ?>>
+                        <span class="repo-kind-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 0 0 .4-9A6 6 0 0 0 6.2 9.6 4 4 0 0 0 7 19z"></path></svg></span>
+                        <span><strong>Git address</strong><span class="meta">GitHub, GitLab or Bitbucket. The tool keeps its own copy; nothing needed on this computer.</span></span>
+                    </label>
+                </div>
+            </fieldset>
+        <?php endif ?>
+        <div class="field repo-path js-repo-kind<?= $hasError('repo_path') ?>" data-kind="folder" <?= $remoteLocals && $kind === 'url' ? 'hidden' : '' ?>>
             <label for="repo_path">Repository folder</label>
-            <input type="text" id="repo_path" name="repo_path" value="<?= e($source['repo_path']) ?>" placeholder="C:\laragon\www\backoffice-bkp" required>
+            <input type="text" id="repo_path" name="repo_path" value="<?= e(\DeployTool\Sources::isManaged($source) ? '' : $source['repo_path']) ?>" placeholder="C:\laragon\www\backoffice-bkp" <?= $remoteLocals && $kind === 'url' ? 'disabled' : 'required' ?>>
             <?= $error('repo_path') ?>
         </div>
+        <?php if ($remoteLocals): ?>
+            <?php $tokenSaved = ($source['repo_token'] ?? '') !== ''; ?>
+            <div class="field repo-path js-repo-kind<?= $hasError('repo_url') ?>" data-kind="url" <?= $kind === 'url' ? '' : 'hidden' ?>>
+                <label for="repo_url">Repository address</label>
+                <input type="text" id="repo_url" name="repo_url" value="<?= e($source['repo_url'] ?? '') ?>" placeholder="https://github.com/you/project.git" class="mono-input" <?= $kind === 'url' ? 'required' : 'disabled' ?>>
+                <p class="help">The tool keeps its own copy in its data folder and follows the branch each time it fetches (stopping on malware markers). Nothing needs to be on this computer. A <code>git@…</code> address uses your SSH key.</p>
+                <?= $error('repo_url') ?>
+            </div>
+            <div class="field repo-path js-repo-kind<?= $hasError('repo_token') ?>" data-kind="url" <?= $kind === 'url' ? '' : 'hidden' ?>>
+                <label for="repo_token">Access token <span class="optional">for a private repository</span></label>
+                <input type="password" id="repo_token" name="repo_token" value="" autocomplete="off" class="mono-input" placeholder="<?= $tokenSaved ? 'Saved. Blank keeps it.' : 'GitHub: Settings → Developer settings → Fine-grained token, Contents: Read' ?>" <?= $kind === 'url' ? '' : 'disabled' ?>>
+                <p class="help">Read-only is enough. Kept encrypted, and sent to git as a header, never in the address.</p>
+                <?php if ($tokenSaved): ?><label class="checkbox"><input type="checkbox" name="repo_token_remove" value="1"> <span>Remove the saved token</span></label><?php endif ?>
+                <?= $error('repo_token') ?>
+            </div>
+        <?php endif ?>
         <div class="field<?= $hasError('branch') ?>">
             <label for="branch">Branch</label>
             <input type="text" id="branch" name="branch" value="<?= e($source['branch']) ?>" placeholder="staging-latest" required>
             <?= $error('branch') ?>
         </div>
-        <div class="field<?= $hasError('remote') ?>">
+        <?php // A Git address always fetches from origin, so the remote is only asked for a folder. ?>
+        <div class="field<?= $remoteLocals ? ' js-repo-kind' : '' ?><?= $hasError('remote') ?>" data-kind="folder" <?= $remoteLocals && $kind === 'url' ? 'hidden' : '' ?>>
             <label for="remote">GitHub remote</label>
-            <input type="text" id="remote" name="remote" value="<?= e($source['remote']) ?>" required>
+            <input type="text" id="remote" name="remote" value="<?= e($source['remote']) ?>" <?= $remoteLocals && $kind === 'url' ? 'disabled' : 'required' ?>>
             <?= $error('remote') ?>
         </div>
     </div>

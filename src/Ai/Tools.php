@@ -564,8 +564,8 @@ final class Tools
     private static function fetchLocal(): array
     {
         $source = Sources::get((string) self::$local) ?? throw new \RuntimeException('This chat has no local to fetch.');
-        Sources::git($source)->fetch($source['remote']);
-        return ['fetched' => "{$source['remote']}/{$source['branch']}"] + self::localStatus($source['key']);
+        $note = Sources::fetch($source);
+        return ['fetched' => "{$source['remote']}/{$source['branch']}", 'note' => $note] + self::localStatus($source['key']);
     }
 
     /**
@@ -718,6 +718,12 @@ final class Tools
         }
         if ($existing === null) {
             $input['key'] = (string) ($fields['key'] ?? '');
+        }
+        // A saved database password (for the database backup) is sent to the SSH server; the same rule.
+        if ($existing !== null && ($existing['db_password'] ?? '') !== '' && $existing['type'] === 'ssh'
+            && (($input['type'] ?? 'ssh') !== 'ssh' || strtolower(trim((string) $input['ssh_host'])) !== strtolower((string) $existing['ssh_host'])
+                || (int) $input['ssh_port'] !== (int) $existing['ssh_port'] || trim((string) $input['ssh_user']) !== (string) $existing['ssh_user'])) {
+            throw new \RuntimeException("{$existing['name']} has a saved database password, so its SSH server and login are changed only on the site's page (index.php?r=site-edit&key={$existing['key']}).");
         }
         // The saved password stays when a site is edited, so a change to where it is sent
         // (or how safely) could hand it to another server. Only the user does that, on the page.

@@ -19,11 +19,13 @@ final class DeployRun
         'checks' => 'Safety checks',
         'lint' => 'PHP syntax check',
         'download' => 'Back up server files',
+        'db_backup' => 'Back up the database',
         'review' => 'Your review',
         'upload' => 'Upload',
         'delete' => 'Delete removed files',
         'verify' => 'Verify uploads',
         'record' => 'Record version',
+        'commands' => 'Commands after deploy',
         'site_check' => 'Site check',
         'sql' => 'SQL',
     ];
@@ -62,8 +64,29 @@ final class DeployRun
         ];
         $run['to'] = $syncTo;
         $run['files'] = $syncFiles;
+        // Speed-ups "Commands after a deploy" and "Database backup": noted now, so the review
+        // shows exactly what will run, whatever is changed on the site's page meanwhile.
+        $runsCommands = in_array($site['type'], ['ssh', 'folder'], true);
+        $run['commands'] = $runsCommands && Settings::on('feature_post_commands') && trim((string) ($site['post_commands'] ?? '')) !== ''
+            ? explode("\n", trim((string) $site['post_commands'])) : [];
+        $run['commands_done'] = 0;
+        $run['db_backup'] = $runsCommands && Settings::on('feature_db_backup') && trim((string) ($site['db_name'] ?? '')) !== ''
+            ? ['name' => $site['db_name'], 'size' => null, 'error' => null] : null;
         RunStore::save($run);
         return $run;
+    }
+
+    /** The steps a deploy or match goes through: without the database backup or commands when it has none. */
+    public static function phases(array $run): array
+    {
+        $phases = self::PHASES;
+        if (empty($run['db_backup'])) {
+            unset($phases['db_backup']);
+        }
+        if (empty($run['commands'])) {
+            unset($phases['commands']);
+        }
+        return $phases;
     }
 
     /**
@@ -132,9 +155,100 @@ final class DeployRun
             'upload' => self::upload($run, $context, $deadline),
             'delete' => self::deleteRemoved($run, $context, $deadline),
             'verify' => self::verify($run, $context, $deadline),
+            'db_backup' => self::databaseBackup($run, $context),
             'record' => self::record($run, $context),
+            'commands' => self::commands($run, $context),
             'site_check' => self::siteCheck($run, $context),
         };
+    }
+
+    /**
+     * Speed-up "Database backup": a mysqldump of the site's database next to the file backup,
+     * before the review (so before anything changes). The login goes to mysqldump as an option
+     * file on its stdin (SSH) or in a private temporary file (folder sites), never on the
+     * command line where other users of the server could see it.
+     */
+    private static function databaseBackup(array &$run, RunContext $context): void
+    {
+        $site = $context->site;
+        $runner = $context->transport();
+        if (!$runner instanceof CommandRunner) {
+            throw new \RuntimeException('This site can no longer run a database backup.');
+        }
+        $options = "[client]\nuser=" . self::optionValue((string) $site['db_user']) . "\npassword=" . self::optionValue((string) $site['db_password'])
+            . "\nhost=" . self::optionValue((string) $site['db_host']) . "\n";
+        $raw = Backup::databaseFile($run['id']) . '.part';
+        @mkdir(dirname($raw), 0700, true);
+        $optionFile = null;
+        try {
+            if ($runner instanceof SshTransport) {
+                $optionArg = '--defaults-extra-file=/dev/stdin';
+                $input = $options;
+            } else {
+                $optionFile = tempnam(sys_get_temp_dir(), 'dtmy');
+                file_put_contents($optionFile, $options);
+                @chmod($optionFile, 0600);
+                $optionArg = '--defaults-extra-file=' . $runner->quote($optionFile);
+                $input = '';
+            }
+            $command = $site['db_dump'] . ' ' . $optionArg . ' --single-transaction --quick --no-tablespaces --routines --triggers -- ' . $runner->quote((string) $site['db_name']);
+            [$code, , $stderr] = $runner->exec($command, $input, $raw);
+            if ($code !== 0) {
+                throw new \RuntimeException('The database backup failed (mysqldump exit code ' . $code . ')' . ($stderr !== '' ? ': ' . mb_substr($stderr, 0, 400) : '.') . ' Nothing was changed on the server. Fix the database settings on the site\'s page, or switch the backup off in Settings → Speed-ups.');
+            }
+            $size = Backup::compressDatabase($raw, $run['id']);
+        } catch (\RuntimeException $e) {
+            @unlink($raw);
+            $run['db_backup']['error'] = $e->getMessage();
+            self::fail($run, $e->getMessage());
+            return;
+        } finally {
+            if ($optionFile !== null) {
+                @unlink($optionFile);
+            }
+        }
+        $run['db_backup']['size'] = $size;
+        Runner::log($run, 'info', 'Database ' . $site['db_name'] . ' backed up (' . number_format($size / 1024, 1) . ' KB compressed).');
+        $run['status'] = 'review';
+        $run['phase'] = 'review';
+        $run['reviewed_at'] = time();
+        Runner::log($run, 'info', 'Waiting for your review.');
+    }
+
+    /** A value for a MySQL option file, quoted. */
+    private static function optionValue(string $value): string
+    {
+        return '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], $value) . '"';
+    }
+
+    /**
+     * Speed-up "Commands after a deploy": the site's commands, one by one, in its folder on the
+     * server, after the files are uploaded and the version recorded. Output goes to the log; a
+     * failed command stops the run (the files stay deployed; Roll back undoes them).
+     */
+    private static function commands(array &$run, RunContext $context): void
+    {
+        $runner = $context->transport();
+        if (!$runner instanceof CommandRunner) {
+            throw new \RuntimeException('This site can no longer run commands.');
+        }
+        while ($run['commands_done'] < count($run['commands'])) {
+            $command = $run['commands'][$run['commands_done']];
+            Runner::log($run, 'info', "Running: $command");
+            [$code, $stdout, $stderr] = $runner->exec($command);
+            $output = trim($stdout . ($stderr !== '' ? "\n" . $stderr : ''));
+            if ($output !== '') {
+                Runner::log($run, $code === 0 ? 'info' : 'error', mb_strlen($output) > 2000 ? '…' . mb_substr($output, -2000) : $output);
+            }
+            if ($code !== 0) {
+                self::fail($run, "The command \"$command\" failed (exit code $code). The files are deployed; fix it and Retry, or Roll back.");
+                return;
+            }
+            $run['commands_done']++;
+            RunStore::save($run); // a retry starts after the commands that already ran
+        }
+        Runner::log($run, 'info', count($run['commands']) . ' command(s) ran.');
+        $run['phase'] = 'site_check';
     }
 
     /** Files whose server copy needs a second look before approving. */
@@ -364,6 +478,10 @@ final class DeployRun
         Runner::log($run, 'info', $packed > 0
             ? "Backup saved: {$run['id']}.zip ($packed file(s), " . number_format((Backup::size($run['id']) ?? 0) / 1024, 1) . ' KB).'
             : 'No backup needed: none of these files exist on the server yet.');
+        if (!empty($run['db_backup'])) {
+            $run['phase'] = 'db_backup'; // then the review
+            return;
+        }
         $run['status'] = 'review';
         $run['phase'] = 'review';
         $run['reviewed_at'] = time();
@@ -512,7 +630,7 @@ final class DeployRun
         $note = $run['type'] === 'sync' ? 'Matched to this commit after a compare' : '';
         $run['new_state_raw'] = ServerState::write($context->transport(), $run['to'], $run['id'], $note);
         Runner::log($run, 'info', 'Recorded commit ' . short_sha($run['to']) . ' on the server.');
-        $run['phase'] = 'site_check';
+        $run['phase'] = !empty($run['commands']) ? 'commands' : 'site_check';
     }
 
     private static function siteCheck(array &$run, RunContext $context): void

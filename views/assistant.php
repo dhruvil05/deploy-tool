@@ -50,12 +50,6 @@ if (\DeployTool\Settings::on('feature_quick_commands')) {
                 <input type="hidden" name="back" value="<?= e($chat['id'] ?? '') ?>" class="js-chat-delete-back">
             </form>
         </section>
-        <section class="card chat-help">
-            <?php $allowedLabels = array_map(static fn (array $p): string => $p[0], array_filter(Ai::PERMISSIONS, static fn (string $key): bool => ($settings['perm_' . $key] ?? '0') !== '0', ARRAY_FILTER_USE_KEY)); ?>
-            <p><strong>What it can do now</strong></p>
-            <p>Read status, history, compare results and file changes<?= $allowedLabels ? ', and: ' . e(implode(', ', array_map('lcfirst', $allowedLabels))) : '' ?>.</p>
-            <p class="chat-lock"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span>It acts only when you ask. Production only goes ahead when you type the site key on its card. You choose the rest in <a href="index.php?r=settings&amp;tab=permissions">AI permissions</a>.</span></p>
-        </section>
     </aside>
 
     <section class="card chat-panel">
@@ -79,6 +73,28 @@ if (\DeployTool\Settings::on('feature_quick_commands')) {
                 <span class="pill"><?= e($sources[$chat['local']]['name'] ?? $chat['local']) ?></span>
             <?php endif ?>
             <span class="pill" title="Change it in Settings"><?= e(Ai::PRESETS[$settings['provider']][0] ?? 'Custom') ?> · <?= e($settings['model']) ?></span>
+            <?php // What the assistant may do (AI permissions), behind an info button instead of a side card. ?>
+            <?php $modes = []; foreach (Ai::PERMISSIONS as $key => [$label]) { $modes[Ai::mode($key, $settings)][] = $label; } ?>
+            <details class="chat-info js-chat-info">
+                <summary class="icon-button" aria-label="What the assistant can do" title="What it can do">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5"></path><path d="M12 7.5h.01"></path></svg>
+                </summary>
+                <div class="chat-info-panel" role="dialog" aria-label="What the assistant can do">
+                    <p class="chat-info-title">What it can do now</p>
+                    <p class="meta">Always: read status, history, compare results and file changes.</p>
+                    <?php foreach (['allow' => ['Does when you ask', 'badge-success'], 'ask' => ['Asks you first (Allow / Deny)', 'badge-warning']] as $mode => [$heading, $style]): ?>
+                        <?php if (!empty($modes[$mode])): ?>
+                            <p class="chat-info-heading"><span class="badge <?= $style ?>"><?= count($modes[$mode]) ?></span> <?= e($heading) ?></p>
+                            <ul><?php foreach ($modes[$mode] as $label): ?><li><?= e($label) ?></li><?php endforeach ?></ul>
+                        <?php endif ?>
+                    <?php endforeach ?>
+                    <?php if (empty($modes['allow']) && empty($modes['ask'])): ?>
+                        <p class="meta">Nothing beyond reading is allowed.</p>
+                    <?php endif ?>
+                    <p class="chat-lock"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span>It acts only when you ask. Production only goes ahead when you type the site key on its card.</span></p>
+                    <a class="button small" href="index.php?r=settings&amp;tab=permissions">Change in AI permissions</a>
+                </div>
+            </details>
             <span class="pill js-chat-usage" title="Used by this chat so far. The price shows when the provider reports it (OpenRouter does)."<?= $chat === null || $chat['messages'] === [] ? ' hidden' : '' ?>><?= $chat !== null ? e(ChatStore::usageText($chat)) : '' ?></span>
             <?php if ($chat !== null): ?>
                 <form method="post" action="index.php?r=assistant-delete" class="inline js-confirm" data-confirm="Delete this chat?">

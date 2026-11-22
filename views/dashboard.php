@@ -138,18 +138,35 @@ $last = $stats['last'];
 <?php endif ?>
 
 <?php if ($layout['hidden']): ?>
-    <details class="hidden-sites">
-        <summary>Show <?= count($layout['hidden']) ?> hidden site(s)</summary>
-        <ul>
+    <?php $types = ['ftp' => 'FTP', 'ssh' => 'SSH', 'folder' => 'Test folder']; ?>
+    <details class="card hidden-sites">
+        <summary class="hidden-sites-head">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"></path><path d="M10.6 5.1A10.9 10.9 0 0 1 12 5c6.5 0 10 7 10 7a17.7 17.7 0 0 1-3.2 4.2"></path><path d="M6.6 6.6C3.9 8.4 2 12 2 12s3.5 7 10 7a10.6 10.6 0 0 0 5.4-1.4"></path><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"></path></svg>
+            <span class="hidden-sites-title">Hidden sites</span>
+            <span class="pill"><?= count($layout['hidden']) ?></span>
+            <span class="meta hidden-sites-hint">Not on the dashboard and skipped by background checks. Their runs and history stay.</span>
+            <svg class="hidden-sites-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+        </summary>
+        <ul class="hidden-sites-list">
             <?php foreach ($layout['hidden'] as $site): ?>
-                <li>
-                    <?= e($site['name']) ?>
-                    <form method="post" action="index.php?r=site-hide" class="inline">
-                        <input type="hidden" name="_csrf" value="<?= e(Http::csrfToken()) ?>">
-                        <input type="hidden" name="key" value="<?= e($site['key']) ?>">
-                        <input type="hidden" name="hidden" value="0">
-                        <button type="submit" class="small">Show on dashboard</button>
-                    </form>
+                <li class="hidden-site">
+                    <div class="hidden-site-text">
+                        <p class="hidden-site-name">
+                            <strong><?= e($site['name']) ?></strong>
+                            <span class="badge badge-neutral"><?= e($types[$site['type']] ?? $site['type']) ?></span>
+                            <?php if ($site['production']): ?><span class="badge badge-danger">Production</span><?php endif ?>
+                        </p>
+                        <p class="meta">Gets code from <?= e(\DeployTool\Sites::sourceLabel($site)) ?></p>
+                    </div>
+                    <div class="hidden-site-actions">
+                        <a class="button small" href="index.php?r=site-edit&amp;key=<?= e(urlencode($site['key'])) ?>">Edit</a>
+                        <form method="post" action="index.php?r=site-hide" class="inline">
+                            <input type="hidden" name="_csrf" value="<?= e(Http::csrfToken()) ?>">
+                            <input type="hidden" name="key" value="<?= e($site['key']) ?>">
+                            <input type="hidden" name="hidden" value="0">
+                            <button type="submit" class="small primary">Show on dashboard</button>
+                        </form>
+                    </div>
                 </li>
             <?php endforeach ?>
         </ul>

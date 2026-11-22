@@ -48,6 +48,43 @@ $lastDeploy ??= null;
 
     <div class="site-status"><p class="meta">Checking…</p></div>
 
+    <?php // Speed-ups "Uptime and certificate monitor" and "Watch servers for changes". ?>
+    <?php $uptime = \DeployTool\Settings::on('feature_uptime') ? \DeployTool\Monitor::result($site['key']) : null; ?>
+    <?php $watch = \DeployTool\Settings::on('feature_server_watch') ? \DeployTool\ServerWatch::result($site['key']) : null; ?>
+    <?php if ($uptime !== null || $watch !== null): ?>
+        <div class="site-checks">
+            <?php if ($uptime !== null): ?>
+                <?php if (!$uptime['up']): ?>
+                    <span class="badge badge-danger" title="<?= e((string) $uptime['problem']) ?>">Down since <?= e(date('H:i', (int) $uptime['down_since'])) ?></span>
+                <?php elseif (!$uptime['ok']): ?>
+                    <span class="badge badge-warning" title="<?= e((string) $uptime['problem']) ?>">Last check failed</span>
+                <?php else: ?>
+                    <span class="badge badge-success" title="Checked <?= e(ago($uptime['checked_at'])) ?>">Up · <?= number_format($uptime['ms'] / 1000, 1) ?> s</span>
+                <?php endif ?>
+                <?php $days = $uptime['cert']['days'] ?? null; ?>
+                <?php if ($days !== null && $days <= \DeployTool\Monitor::CERT_WARN_DAYS): ?>
+                    <span class="badge badge-danger"><?= $days < 0 ? 'Certificate expired' : "Certificate ends in $days day" . ($days === 1 ? '' : 's') ?></span>
+                <?php elseif (isset($uptime['cert']['error'])): ?>
+                    <span class="badge badge-warning" title="<?= e($uptime['cert']['error']) ?>">Certificate not checked</span>
+                <?php endif ?>
+            <?php endif ?>
+            <?php if ($watch !== null): ?>
+                <?php $watchCount = array_sum($watch['counts'] ?? [0]); ?>
+                <a class="watch-link" href="index.php?r=watch&amp;site=<?= e(urlencode($site['key'])) ?>">
+                    <?php if (!empty($watch['malware'])): ?>
+                        <span class="badge badge-danger">Malware markers on the server</span>
+                    <?php elseif ($watchCount > 0 && empty($watch['seen'])): ?>
+                        <span class="badge badge-warning"><?= $watchCount ?> file<?= $watchCount === 1 ? '' : 's' ?> changed on the server</span>
+                    <?php elseif (!empty($watch['error'])): ?>
+                        <span class="badge badge-warning">Server watch failed</span>
+                    <?php else: ?>
+                        <span class="meta">Server watch: no surprises · <?= e(ago($watch['checked_at'])) ?></span>
+                    <?php endif ?>
+                </a>
+            <?php endif ?>
+        </div>
+    <?php endif ?>
+
     <p class="meta last-deploy">
         <?php if ($lastDeploy === null): ?>
             No deploy from this tool yet.

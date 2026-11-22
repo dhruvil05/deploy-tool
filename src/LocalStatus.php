@@ -25,19 +25,17 @@ final class LocalStatus
             'last_fetch' => null,
         ];
 
-        if (!$git->isRepo()) {
-            $status['error'] = 'The folder of this local is not a git repository.';
+        // The dashboard draws this on every visit, and each git call costs ~0.1 s on Windows:
+        // five calls when the malware results of both commits are already known (Safety caches them).
+        $status['commit'] = $git->commitInfoOf($branch);
+        if ($status['commit'] === null) {
+            $status['error'] = $git->isRepo() ? "Branch $branch was not found in the repository." : 'The folder of this local is not a git repository.';
             return $status;
         }
-        $sha = $git->resolve($branch);
-        if ($sha === null) {
-            $status['error'] = "Branch $branch was not found in the repository.";
-            return $status;
-        }
-        $status['commit'] = $git->commitInfo($sha);
+        $sha = $status['commit']['sha'];
         $status['malware'] = Safety::malwareFindings($git, $sha);
 
-        $current = $git->currentBranch();
+        $current = Sources::isManaged($source) ? $branch : $git->currentBranch(); // the tool's own copy has no checkout
         if ($current !== $branch) {
             $status['warnings'][] = "You have $current checked out, not $branch.";
         } elseif ($count = count($git->uncommittedFiles())) {
@@ -49,12 +47,9 @@ final class LocalStatus
         $status['last_fetch'] = $git->lastFetchTime();
         if ($remoteSha === null) {
             $status['warnings'][] = "$remote/$branch is not known yet. Fetch from GitHub.";
-        } else {
-            $status['ahead'] = $git->countBetween($remoteSha, $sha);
-            $status['behind'] = $git->countBetween($sha, $remoteSha);
-            if ($remoteSha !== $sha) {
-                $status['remote_malware'] = Safety::malwareFindings($git, $remoteSha);
-            }
+        } elseif ($remoteSha !== $sha) {
+            [$status['ahead'], $status['behind']] = $git->aheadBehind($sha, $remoteSha);
+            $status['remote_malware'] = Safety::malwareFindings($git, $remoteSha);
         }
 
         return $status;

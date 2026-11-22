@@ -32,6 +32,7 @@ final class RunController
             'run-export' => $this->export(),
             'history' => $this->history(),
             'backup-download' => $this->backupDownload(),
+            'db-backup-download' => $this->databaseDownload(),
             default => Http::deny(404, 'Page not found.'),
         };
     }
@@ -471,6 +472,21 @@ final class RunController
         header('Content-Disposition: attachment; filename="' . $name . '"');
         header('Content-Length: ' . filesize($zip));
         readfile($zip);
+        exit;
+    }
+
+    /** Speed-up "Database backup": the run's mysqldump, compressed. */
+    private function databaseDownload(): void
+    {
+        $run = $this->run((string) ($_GET['id'] ?? ''));
+        $file = Backup::databaseFile($run['id']);
+        if (!is_file($file)) {
+            Http::deny(404, 'This run has no database backup.');
+        }
+        header('Content-Type: application/gzip');
+        header('Content-Disposition: attachment; filename="' . $run['id'] . '-database.sql.gz"');
+        header('Content-Length: ' . filesize($file));
+        readfile($file);
         exit;
     }
 

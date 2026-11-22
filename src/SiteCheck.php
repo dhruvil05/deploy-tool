@@ -86,8 +86,8 @@ final class SiteCheck
         return ['ok' => $ok, 'skipped' => false, 'message' => $message, 'pages' => $pages];
     }
 
-    /** One page: loads it, looks for PHP errors, times it. */
-    private static function page(array $site, string $path): array
+    /** One page: loads it, looks for PHP errors, times it. Also used by the uptime monitor. */
+    public static function page(array $site, string $path): array
     {
         $url = rtrim(trim((string) $site['url']), '/') . '/' . ltrim($path, '/');
         // The certificate is checked first. This only reads a public page and sends nothing,

@@ -76,7 +76,21 @@ test('chats: renaming works again and again, and survives an older copy being sa
 
 test('speed-ups: every switch exists, defaults are as documented', function () {
     foreach (array_keys(Settings::FEATURES) as $feature) {
-        $off = in_array($feature, ['feature_bundle_upload', 'feature_discord_bridge', 'feature_slack_bridge'], true);
+        $off = in_array($feature, ['feature_bundle_upload', 'feature_discord_bridge', 'feature_slack_bridge', 'feature_server_watch', 'feature_uptime'], true);
         check(Settings::on($feature) === !$off, "$feature is " . ($off ? 'off' : 'on') . ' by default');
+    }
+});
+
+test('speed-ups page: every switch is in exactly one group, with a short line; the page draws each one', function () {
+    $grouped = array_merge(...array_map(static fn (array $g): array => $g[2], array_values(Settings::FEATURE_GROUPS)));
+    check(count($grouped) === count(array_unique($grouped)) && array_diff(array_keys(Settings::FEATURES), $grouped) === [] && array_diff($grouped, array_keys(Settings::FEATURES)) === [], 'each switch in one group');
+    check(array_diff(array_keys(Settings::FEATURES), array_keys(Settings::FEATURE_SHORT)) === [], 'each switch has a short line');
+    $values = Settings::all();
+    $html = DeployTool\View::partial('settings_speedups', ['values' => $values, 'errors' => [], 'hasError' => static fn (): string => '', 'error' => static fn (): string => '']);
+    foreach (array_keys(Settings::FEATURES) as $feature) {
+        check(substr_count($html, 'type="checkbox" class="switch js-sp-switch" name="' . $feature . '"') === 1 && str_contains($html, 'name="' . $feature . '" value="0"'), "$feature drawn once, with its off value");
+    }
+    foreach (['bundle_min_files', 'watch_hours', 'monitor_minutes', 'notify_webhook', 'discord_bot_token', 'slack_app_token', 'slack_actions'] as $field) {
+        check(str_contains($html, 'name="' . $field . '"'), "$field is on the page, under its switch");
     }
 });

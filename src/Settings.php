@@ -37,6 +37,11 @@ final class Settings
         'feature_debug_flags' => ['Flag leftover debug code', 'The review lists debug calls in the lines a deploy adds (var_dump, print_r, dd, die, console.log, debugger, phpinfo), with file and line, so they don\'t reach a live site.', 'Off: no debug-code check.'],
         'feature_commit_files' => ['Files of each commit', 'The dashboard, compare and run pages show the commits involved, each with the files it changed as folders; click a file to see its changes. Several commits get one tree each.', 'Off: no commit file trees.'],
         'feature_delete_extras' => ['Delete extra server files with "Make it match"', 'On a compare of a non-production site, "Extra on server" gets tick boxes (none ticked): the ticked files, usually ones deleted in git but left on the server, are deleted by "Make it match", after a backup, with the usual review and Roll back. Production never deletes.', 'Off: extra files always stay.'],
+        'feature_server_watch' => ['Watch servers for changes', 'Every few hours (set below) each site\'s files are read, the way a compare reads them, and compared with the last time. Files changed, added or removed that no deploy of the tool made (a hotfix on the server, or a hack) are listed on the site\'s card and sent to your chat apps, and the top folder\'s build files are scanned for malware markers. On FTP sites this uploads the compare\'s small temporary file each time. Off by default.', 'Off: servers are only read when you compare.'],
+        'feature_uptime' => ['Uptime and certificate monitor', 'Every few minutes (set below) each site with an address loads its check pages and reads its HTTPS certificate. You hear when a site goes down, when it is back, and while its certificate ends within 14 days; the site\'s card shows its state. Off by default.', 'Off: sites are only checked after a deploy.'],
+        'feature_post_commands' => ['Commands after a deploy', 'SSH and folder sites can list commands (on the site\'s page), such as composer install or php artisan migrate. They show at the review and run on the server after the upload; their output is in the log and a failed command stops the run.', 'Off: no commands run, even when a site lists some.'],
+        'feature_db_backup' => ['Database backup before a deploy', 'SSH and folder sites with a database set on their page get a database copy (mysqldump) with the file backup, before anything changes. It is kept with the run and can be downloaded from its page.', 'Off: only files are backed up.'],
+        'feature_remote_locals' => ['Locals from a Git address', 'A local can be a Git address (GitHub, GitLab, Bitbucket) instead of a folder: the tool keeps its own copy, follows the branch when it fetches (stopping on malware markers, like Pull), and deploys from it. Nothing needs to be on this computer.', 'Off: locals are folders on this computer.'],
         'feature_discord_bridge' => ['Chat with the assistant from Discord', 'A Discord bot you create reads one channel: start a chat there with !new and ask in its thread; the answer comes back to Discord. It may act as far as AI permissions and the choice below allow, asking for your ✅ first; approving a production deploy is always done in the tool. Only the Discord users listed below are answered. Off by default; set it up below.', 'Off: Discord is never read.'],
         'feature_slack_bridge' => ['Chat with the assistant from Slack', 'A Slack app you create reads one channel over a connection the tool opens to Slack (Socket Mode): start a chat there with !new and ask in its thread; the answer comes back to Slack. It may act as far as AI permissions and the choice below allow, asking for your ✅ first; approving a production deploy is always done in the tool. Only the Slack members listed below are answered. Off by default; set it up below.', 'Off: Slack is never read.'],
         'feature_git_pull' => ['Pull from GitHub on the dashboard', 'When GitHub has commits your local doesn\'t, the dashboard offers Pull. It only fast-forwards (no merges), refuses with uncommitted changes, stops before any file changes when GitHub\'s commit has malware markers, and runs no git hooks.', 'Off: pull in your own git tool.'],
@@ -53,7 +58,7 @@ final class Settings
             str_starts_with($field, 'ai_perm_') => 'permissions',
             str_starts_with($field, 'cloud_') => 'cloud',
             str_starts_with($field, 'ai_') => 'ai',
-            str_starts_with($field, 'feature_'), str_starts_with($field, 'discord_'), str_starts_with($field, 'slack_'), in_array($field, ['notify_webhook', 'bundle_min_files'], true) => 'speedups',
+            str_starts_with($field, 'feature_'), str_starts_with($field, 'discord_'), str_starts_with($field, 'slack_'), in_array($field, ['notify_webhook', 'bundle_min_files', 'watch_hours', 'monitor_minutes'], true) => 'speedups',
             $field === 'deployer_name' => 'general',
             in_array($field, ['git_path', 'php_path', 'ssh_path'], true) => 'programs',
             $field === 'protected_paths' => 'protected',
@@ -87,8 +92,69 @@ final class Settings
             'feature_bundle_upload' => '0', // see FEATURES: try it on one deploy first
             'feature_discord_bridge' => '0', // needs a Discord bot set up first
             'feature_slack_bridge' => '0', // needs a Slack app set up first
+            'feature_server_watch' => '0', // reads every server on a timer
+            'feature_uptime' => '0', // loads every site on a timer
+            'watch_hours' => '6',
+            'monitor_minutes' => '5',
         ] + array_fill_keys(array_keys(self::FEATURES), '1');
     }
+
+    /**
+     * How Settings → Speed-ups shows FEATURES: group => [title, what the group is for, its
+     * features in order]. Every feature is in exactly one group (the tests check).
+     */
+    public const FEATURE_GROUPS = [
+        'deploy' => ['Deploying', 'Fewer steps and faster uploads, with a safety net.', [
+            'feature_fast_verify', 'feature_bundle_upload', 'feature_promote', 'feature_post_commands', 'feature_db_backup', 'feature_delete_extras',
+        ]],
+        'review' => ['Reviewing', 'See what a deploy brings before you approve it.', [
+            'feature_review_insights', 'feature_detect_sql', 'feature_debug_flags', 'feature_three_way', 'feature_commit_files', 'feature_release_notes',
+        ]],
+        'git' => ['Git and locals', 'Keep your code in step with GitHub.', [
+            'feature_auto_fetch', 'feature_git_pull', 'feature_remote_locals',
+        ]],
+        'watch' => ['Watching your sites', 'Hear about problems before your users do.', [
+            'feature_smart_checks', 'feature_uptime', 'feature_server_watch',
+        ]],
+        'chat' => ['Messages and chat apps', 'News about deploys, and the assistant on your phone.', [
+            'feature_notify', 'feature_discord_bridge', 'feature_slack_bridge',
+        ]],
+        'assistant' => ['AI assistant', 'Quicker answers, and some without the AI at all.', [
+            'feature_streaming', 'feature_quick_commands', 'feature_explain',
+        ]],
+        'tool' => ['The tool itself', 'Keeps pages quick as your history grows.', [
+            'feature_run_index',
+        ]],
+    ];
+
+    /** One line per feature for Settings → Speed-ups; the full text (FEATURES) is under "Details". */
+    public const FEATURE_SHORT = [
+        'feature_bundle_upload' => 'Big FTP deploys go up as one file and are unpacked on the server.',
+        'feature_fast_verify' => 'Checks SSH uploads by fingerprint instead of downloading them again.',
+        'feature_promote' => 'After a deploy, prepare the same commit for the next site in one click.',
+        'feature_review_insights' => 'Groups the review by folder, marks risky files, previews changes in place.',
+        'feature_auto_fetch' => 'Fetches from GitHub every 10 minutes while the dashboard is open.',
+        'feature_run_index' => 'A small index keeps the dashboard and History quick.',
+        'feature_release_notes' => 'Lists each deploy\'s commits, ready to copy for Slack or email.',
+        'feature_notify' => 'A short message to a chat channel when a deploy finishes, fails or waits for SQL.',
+        'feature_smart_checks' => 'Several check pages, timed before and after; a slow or broken page is named.',
+        'feature_three_way' => 'For a file edited on the server: which of its lines an upload would lose.',
+        'feature_debug_flags' => 'Points out var_dump, dd, console.log and the like in a deploy\'s new lines.',
+        'feature_commit_files' => 'Each commit with the files it changed, as folders, on several pages.',
+        'feature_delete_extras' => '"Make it match" can delete server files you tick (never on production).',
+        'feature_server_watch' => 'Every few hours, lists files changed on a server outside the tool, and scans for malware.',
+        'feature_uptime' => 'Every few minutes, checks each site is up and its certificate isn\'t ending.',
+        'feature_post_commands' => 'Runs a site\'s commands (composer install, migrations…) after the upload.',
+        'feature_db_backup' => 'Saves a mysqldump of the site\'s database before anything changes.',
+        'feature_remote_locals' => 'A local can be a GitHub address; the tool keeps its own copy.',
+        'feature_discord_bridge' => 'Ask the assistant in a Discord channel and get the answer there.',
+        'feature_slack_bridge' => 'Ask the assistant in a Slack channel and get the answer there.',
+        'feature_git_pull' => 'A Pull button on the dashboard: fast-forward only, stopped by malware.',
+        'feature_streaming' => 'The assistant\'s answer shows word by word as it is written.',
+        'feature_quick_commands' => '/status, /deploy, /history and more answer at once, without the AI.',
+        'feature_explain' => 'A button on the review asks the AI for a short summary of the deploy.',
+        'feature_detect_sql' => 'Lists migrations and table changes before the deploy, not only at the SQL step.',
+    ];
 
     /** What the assistant may do when you write from Discord: value => [label, explanation]. */
     public const DISCORD_ACTIONS = [
@@ -181,6 +247,15 @@ final class Settings
         }
         if ($values['discord_user_ids'] !== '' && !preg_match('/^\d{15,21}(, \d{15,21})*$/', $values['discord_user_ids'])) {
             $errors['discord_user_ids'] = 'Paste user IDs: long numbers separated by commas (right-click your name → Copy User ID).';
+        }
+        foreach (['watch_hours', 'monitor_minutes'] as $timing) {
+            $values[$timing] = $values[$timing] !== '' ? $values[$timing] : self::defaults()[$timing]; // a blank field: the default
+        }
+        if (!ctype_digit($values['watch_hours']) || (int) $values['watch_hours'] < 1 || (int) $values['watch_hours'] > 48) {
+            $errors['watch_hours'] = 'Enter 1 to 48 hours.';
+        }
+        if (!ctype_digit($values['monitor_minutes']) || (int) $values['monitor_minutes'] < 1 || (int) $values['monitor_minutes'] > 60) {
+            $errors['monitor_minutes'] = 'Enter 1 to 60 minutes.';
         }
         foreach (['discord_actions', 'slack_actions'] as $choice) {
             if (!isset(self::DISCORD_ACTIONS[$values[$choice]])) {

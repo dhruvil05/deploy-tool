@@ -227,6 +227,58 @@ $types = [
                 </div>
             </div>
         </section>
+
+        <?php // Speed-ups "Commands after a deploy" and "Database backup": SSH and folder sites only. ?>
+        <?php $postCommands = \DeployTool\Settings::on('feature_post_commands'); $dbBackup = \DeployTool\Settings::on('feature_db_backup'); ?>
+        <?php if ($postCommands || $dbBackup): ?>
+            <section class="card settings-card js-type-group" data-type="ssh folder" <?= in_array($type, ['ssh', 'folder'], true) ? '' : 'hidden' ?>>
+                <h2>After and before a deploy</h2>
+                <?php if ($postCommands): ?>
+                    <div class="field<?= $hasError('post_commands') ?>">
+                        <label for="post_commands">Commands after a deploy <span class="optional">optional</span></label>
+                        <textarea id="post_commands" name="post_commands" rows="3" class="mono-input" placeholder="composer install --no-dev --optimize-autoloader&#10;php artisan migrate --force"><?= e($site['post_commands']) ?></textarea>
+                        <p class="help">One per line, run in the site's folder after the files are uploaded (SSH: on the server; folder: on this computer). Shown at every review; a failed one stops the run. Only you set these here: the AI assistant can't.</p>
+                        <?= $error('post_commands') ?>
+                    </div>
+                <?php endif ?>
+                <?php if ($dbBackup): ?>
+                    <?php $dbSaved = ($site['db_password'] ?? '') !== ''; ?>
+                    <p class="field-label">Database backup <span class="optional">optional</span></p>
+                    <p class="help">With a database name, every deploy and match first saves a mysqldump of it next to the file backup. The login goes to mysqldump privately, never on the command line.</p>
+                    <div class="field-row">
+                        <div class="field<?= $hasError('db_name') ?>">
+                            <label for="db_name">Database name</label>
+                            <input type="text" id="db_name" name="db_name" value="<?= e($site['db_name']) ?>" autocomplete="off">
+                            <?= $error('db_name') ?>
+                        </div>
+                        <div class="field<?= $hasError('db_user') ?>">
+                            <label for="db_user">User</label>
+                            <input type="text" id="db_user" name="db_user" value="<?= e($site['db_user']) ?>" autocomplete="off">
+                            <?= $error('db_user') ?>
+                        </div>
+                    </div>
+                    <div class="field-row">
+                        <div class="field<?= $hasError('db_password') ?>">
+                            <label for="db_password">Password</label>
+                            <input type="password" id="db_password" name="db_password" value="" autocomplete="new-password" placeholder="<?= $dbSaved ? 'Saved. Blank keeps it.' : '' ?>">
+                            <?php if ($dbSaved): ?><label class="checkbox"><input type="checkbox" name="db_password_remove" value="1"> <span>Remove the saved password</span></label><?php endif ?>
+                            <?= $error('db_password') ?>
+                        </div>
+                        <div class="field<?= $hasError('db_host') ?>">
+                            <label for="db_host">Host</label>
+                            <input type="text" id="db_host" name="db_host" value="<?= e($site['db_host']) ?>">
+                            <?= $error('db_host') ?>
+                        </div>
+                    </div>
+                    <div class="field<?= $hasError('db_dump') ?>">
+                        <label for="db_dump">mysqldump program</label>
+                        <input type="text" id="db_dump" name="db_dump" value="<?= e($site['db_dump']) ?>" class="mono-input">
+                        <p class="help">Usually just <code>mysqldump</code>. For a folder site on Laragon, the full path, e.g. <code>C:\laragon\bin\mysql\mysql-8.0\bin\mysqldump.exe</code>.</p>
+                        <?= $error('db_dump') ?>
+                    </div>
+                <?php endif ?>
+            </section>
+        <?php endif ?>
     </div>
 
     <div class="save-bar">

@@ -149,6 +149,51 @@ deploys in one go"). Off, the tool works exactly as before.
 - **AI backup model** (Settings → AI assistant): when the main model times out or fails, the step
   is tried once with this one. Blank switches it off.
 
+### When the project isn't on this computer
+
+Five more speed-ups, each with its own switch in Settings → Speed-ups. The first two read your
+servers on a timer, so they start **off**; the others do nothing until you fill in a site's or
+local's fields.
+
+- **Watch servers for changes** (off by default): every few hours (*Watch servers every*, default
+  6) each site's files are read the way a compare reads them and compared with the last time.
+  Files changed, added or removed that no deploy, match or rollback of the tool made (a hotfix on
+  the server, or a hack) show on the site's card ("3 files changed on the server") and go to your
+  webhook, Discord and Slack. The top folder's build files (`package.json`, `*.config.js`, `init`,
+  `api.js`…) are also scanned for the npm malware's markers, in memory. The **Server watch** page
+  lists the files, with **Check now** and **Mark as seen**. Protected paths are left out. On FTP
+  sites each check uploads the compare's small temporary file.
+- **Uptime and certificate monitor** (off by default): every few minutes (*Check sites every*,
+  default 5) each site with an address loads its check pages and reads its HTTPS certificate.
+  The card shows **Up**, **Down since …** or **Certificate ends in N days**; you're told when a site
+  goes down (after two failed checks in a row), when it's back, and daily while the certificate
+  ends within 14 days.
+- **Commands after a deploy:** on an SSH or folder site's page, list commands such as
+  `composer install --no-dev` or `php artisan migrate --force` (up to 10). They show at every
+  review, run in the site's folder after the upload, and their output goes to the log. A failed
+  command stops the run (the files stay deployed; Retry or Roll back). Only you set them: the AI
+  assistant can't.
+- **Database backup before a deploy:** on an SSH or folder site's page, give the database name,
+  user, password (stored encrypted) and host. Every deploy and match then saves a mysqldump next
+  to the file backup, before the review, and the review links to the `.sql.gz`. The login goes to
+  mysqldump as an option file on its input (SSH) or a private temporary file (folder sites),
+  never on the command line. If the dump fails, the run stops before anything changes. Restoring
+  is up to you (import the file with your database tool).
+- **Locals from a Git address:** when adding or editing a local, pick **Git address** and paste
+  e.g. `https://github.com/you/project.git` (plus a read-only access token for a private
+  repository, stored encrypted and sent as a header, never in the address) or a `git@…` address
+  (uses your SSH key). The tool keeps its own copy in its data folder (`repos/`), and Fetch moves
+  its branch to GitHub's, stopping on malware markers like Pull. Deploys, compares and the
+  assistant work from it as from any local.
+
+The timed checks run in a background process (like the chat bridges) that starts when you open
+any page and stops when both are switched off.
+
+### Screens
+
+The pages use the whole width of wide screens (up to 1680px) and adapt down to phones: the menu
+scrolls sideways, number tiles go two per row, and a run's files become small cards.
+
 ## Where the data lives, and cloud backup
 
 - **Storage folder**: everything (settings, sites with their passwords, runs, backups, chats)

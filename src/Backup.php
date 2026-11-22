@@ -24,6 +24,33 @@ final class Backup
         return STORAGE_DIR . '/backups/' . $runId;
     }
 
+    /** Speed-up "Database backup": storage/backups/<run id>.sql.gz */
+    public static function databaseFile(string $runId): string
+    {
+        return STORAGE_DIR . '/backups/' . $runId . '.sql.gz';
+    }
+
+    /** Compresses a raw dump into databaseFile() a piece at a time (dumps can be big), removes the raw one; returns the size. */
+    public static function compressDatabase(string $raw, string $runId): int
+    {
+        $target = self::databaseFile($runId);
+        $in = fopen($raw, 'rb');
+        $out = gzopen($target . '.tmp', 'wb6');
+        if ($in === false || $out === false) {
+            throw new \RuntimeException('Could not save the database backup.');
+        }
+        while (!feof($in)) {
+            gzwrite($out, (string) fread($in, 1 << 20));
+        }
+        fclose($in);
+        gzclose($out);
+        @unlink($raw);
+        if (!rename($target . '.tmp', $target)) {
+            throw new \RuntimeException('Could not save the database backup.');
+        }
+        return (int) filesize($target);
+    }
+
     /** Saves one server copy while the run is still downloading. */
     public static function save(string $runId, string $path, string $contents): void
     {

@@ -102,20 +102,10 @@ final class Api
         return strlen($a) <=> strlen($b) ?: strcmp($a, $b);
     }
 
-    /** Splits text into parts of at most MAX_LENGTH, at line breaks where possible. */
+    /** Splits text into parts Discord accepts (MAX_LENGTH each). */
     public static function split(string $text): array
     {
-        $text = trim($text) === '' ? '(empty answer)' : trim($text);
-        $parts = [];
-        while (mb_strlen($text) > self::MAX_LENGTH) {
-            $chunk = mb_substr($text, 0, self::MAX_LENGTH);
-            $cut = mb_strrpos($chunk, "\n");
-            $cut = $cut !== false && $cut > self::MAX_LENGTH / 2 ? $cut : self::MAX_LENGTH;
-            $parts[] = rtrim(mb_substr($text, 0, $cut));
-            $text = ltrim(mb_substr($text, $cut));
-        }
-        $parts[] = $text;
-        return $parts;
+        return \DeployTool\Remote\Conversation::split($text, self::MAX_LENGTH);
     }
 
     private static function id(string $id): string

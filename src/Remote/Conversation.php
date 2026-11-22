@@ -33,6 +33,22 @@ final class Conversation
     private const YES = '/^(y|yes|ok|okay|allow|go|go ahead|do it|sure|✅|👍|:white_check_mark:|:\+1:)[.!]*$/iu';
     private const NO = '/^(n|no|nope|deny|cancel|don\'?t|stop|❌|👎|:x:|:-1:)[.!]*$/iu';
 
+    /** Splits text into parts of at most $max characters, at line breaks where possible (each app has a limit). */
+    public static function split(string $text, int $max): array
+    {
+        $text = trim($text) === '' ? '(empty answer)' : trim($text);
+        $parts = [];
+        while (mb_strlen($text) > $max) {
+            $chunk = mb_substr($text, 0, $max);
+            $cut = mb_strrpos($chunk, "\n");
+            $cut = $cut !== false && $cut > $max / 2 ? $cut : $max;
+            $parts[] = rtrim(mb_substr($text, 0, $cut));
+            $text = ltrim(mb_substr($text, $cut));
+        }
+        $parts[] = $text;
+        return $parts;
+    }
+
     /** Whether the app is set to "Only read" (Settings → Speed-ups). */
     public static function readOnly(Outbox $out): bool
     {

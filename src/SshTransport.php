@@ -10,13 +10,25 @@ namespace DeployTool;
  * and the server fingerprints itself without anything being put in the web folder.
  * The agent is copied to ~/.deploy-tool/ on the server the first time it is needed.
  */
-final class SshTransport implements Transport
+final class SshTransport implements Transport, CommandRunner
 {
     private const AGENT_DIR = '~/.deploy-tool';
     private const MARKER = "DTAGENT1\n";
 
     public function __construct(private readonly array $site)
     {
+    }
+
+    /** Runs a command in the site's folder on the server (its login shell, over the same SSH login). */
+    public function exec(string $command, string $input = '', ?string $outputFile = null): array
+    {
+        // ssh_root is checked on save (only / ~ letters, digits . _ -), so it is safe unquoted, and ~ still works.
+        return $this->ssh('cd ' . $this->site['ssh_root'] . ' && ' . $command, $input, $outputFile);
+    }
+
+    public function quote(string $argument): string
+    {
+        return "'" . str_replace("'", "'\\''", $argument) . "'";
     }
 
     public function batchSize(): int
@@ -187,11 +199,14 @@ final class SshTransport implements Transport
         }
     }
 
-    /** One ssh call. Input, output and errors go through files, so nothing can deadlock. */
-    private function ssh(string $remoteCommand, string $input): array
+    /**
+     * One ssh call. Input, output and errors go through files, so nothing can deadlock. With
+     * $outputTo, stdout is written to that file instead and comes back empty.
+     */
+    private function ssh(string $remoteCommand, string $input, ?string $outputTo = null): array
     {
         $inputFile = tempnam(sys_get_temp_dir(), 'dtssh');
-        $outputFile = tempnam(sys_get_temp_dir(), 'dtssh');
+        $outputFile = $outputTo ?? tempnam(sys_get_temp_dir(), 'dtssh');
         $errorFile = tempnam(sys_get_temp_dir(), 'dtssh');
         file_put_contents($inputFile, $input);
         try {
@@ -204,11 +219,13 @@ final class SshTransport implements Transport
                 throw new \RuntimeException('Could not start ssh (' . Settings::sshBinary() . '). Check the SSH program in Settings.');
             }
             $code = proc_close($process);
-            return [$code, TempFile::read($outputFile, 'ssh'), trim(TempFile::read($errorFile, 'ssh'))];
+            return [$code, $outputTo === null ? TempFile::read($outputFile, 'ssh') : '', trim(TempFile::read($errorFile, 'ssh'))];
         } finally {
             @unlink($inputFile);
-            @unlink($outputFile);
             @unlink($errorFile);
+            if ($outputTo === null) {
+                @unlink($outputFile);
+            }
         }
     }
 

@@ -103,7 +103,9 @@
                 }
                 render(data);
                 if (data.status === 'running') {
-                    setTimeout(step, data.worker ? 1000 : (data.busy ? 1500 : 100));
+                    // With a background worker the page only reports, so a hidden tab asks less often;
+                    // without one the page itself moves the run on and keeps its pace.
+                    setTimeout(step, data.worker ? (document.hidden ? 5000 : 1000) : (data.busy ? 1500 : 100));
                 } else {
                     window.location.reload();
                 }
@@ -232,6 +234,93 @@
         });
     });
 
+    // Assistant: the info panel (what it may do) closes on a click elsewhere or Escape.
+    const chatInfo = document.querySelector('.js-chat-info');
+    if (chatInfo) {
+        document.addEventListener('click', (event) => {
+            if (chatInfo.open && !chatInfo.contains(event.target)) {
+                chatInfo.open = false;
+            }
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && chatInfo.open) {
+                chatInfo.open = false;
+                chatInfo.querySelector('summary').focus();
+            }
+        });
+    }
+
+    // Settings → Speed-ups: a switch opens its feature's settings and updates the counts;
+    // "Details" shows the full text; the search and All / On / Off narrow the list.
+    const speedups = document.querySelector('.sp-groups');
+    if (speedups) {
+        const rows = [...speedups.querySelectorAll('.js-sp-row')];
+        const search = document.querySelector('.js-sp-search');
+        let show = 'all';
+        const refresh = () => {
+            const query = search.value.trim().toLowerCase();
+            let visible = 0;
+            for (const row of rows) {
+                const on = row.querySelector('.js-sp-switch').checked;
+                row.classList.toggle('is-on', on);
+                row.hidden = !(show === 'all' || (show === 'on') === on) || (query !== '' && !row.dataset.search.includes(query));
+                visible += row.hidden ? 0 : 1;
+            }
+            for (const group of speedups.querySelectorAll('.js-sp-group')) {
+                const groupRows = rows.filter((row) => group.contains(row));
+                group.hidden = groupRows.every((row) => row.hidden);
+                group.querySelector('.js-sp-group-count').textContent = `${groupRows.filter((row) => row.classList.contains('is-on')).length}/${groupRows.length}`;
+            }
+            const onCount = rows.filter((row) => row.classList.contains('is-on')).length;
+            document.querySelector('.js-sp-on').textContent = onCount;
+            const menuCount = document.querySelector('#tab-link-speedups .pill');
+            if (menuCount) {
+                menuCount.textContent = `${onCount}/${rows.length}`;
+            }
+            rows.forEach((row) => row.querySelectorAll('.js-sp-default').forEach((badge) => { badge.hidden = row.classList.contains('is-on'); }));
+            speedups.querySelector('.js-sp-empty').hidden = visible > 0;
+        };
+        rows.forEach((row) => {
+            const extra = row.querySelector('.js-sp-extra');
+            row.querySelector('.js-sp-switch').addEventListener('change', (event) => {
+                if (extra) {
+                    extra.hidden = !event.target.checked; // still sent with the form, so its values are kept
+                }
+                refresh();
+            });
+            const more = row.querySelector('.js-sp-more');
+            more.addEventListener('click', () => {
+                const details = row.querySelector('.sp-details');
+                details.hidden = !details.hidden;
+                more.setAttribute('aria-expanded', details.hidden ? 'false' : 'true');
+                more.textContent = details.hidden ? 'Details' : 'Less';
+            });
+        });
+        search.addEventListener('input', refresh);
+        document.querySelectorAll('.js-sp-filter').forEach((button) => button.addEventListener('click', () => {
+            show = button.dataset.show;
+            document.querySelectorAll('.js-sp-filter').forEach((other) => {
+                other.classList.toggle('active', other === button);
+                other.setAttribute('aria-pressed', other === button ? 'true' : 'false');
+            });
+            refresh();
+        }));
+    }
+
+    // Edit local (speed-up "Locals from a Git address"): folder or Git address; the other's fields hide.
+    document.querySelectorAll('.js-repo-kinds input').forEach((radio) => radio.addEventListener('change', () => {
+        document.querySelectorAll('.js-repo-kind').forEach((group) => {
+            const shown = group.dataset.kind === radio.value;
+            group.hidden = !shown;
+            group.querySelectorAll('input').forEach((input) => {
+                input.disabled = !shown;
+                if (['repo_path', 'repo_url', 'remote'].includes(input.id)) {
+                    input.required = shown;
+                }
+            });
+        });
+    }));
+
     // Settings → Speed-ups → Discord / Slack: "Test connection" checks the tokens and channel
     // (nothing is saved). The button names its route and which field goes as which value.
     document.querySelectorAll('.js-remote-test').forEach((button) => button.addEventListener('click', async () => {
@@ -344,7 +433,7 @@
         const sync = () => {
             const type = (siteTypes.find((radio) => radio.checked) || siteTypes[0]).value;
             document.querySelectorAll('.js-type-group').forEach((group) => {
-                group.hidden = group.dataset.type !== type;
+                group.hidden = !group.dataset.type.split(' ').includes(type); // "ssh folder": shown for either
             });
         };
         siteTypes.forEach((radio) => radio.addEventListener('change', sync));
@@ -1414,7 +1503,7 @@
                     // the next poll tries again
                 }
                 if (!finished) {
-                    pollTimer = setTimeout(poll, 600); // often enough for an answer appearing as it is written
+                    pollTimer = setTimeout(poll, document.hidden ? 2000 : 600); // often enough for an answer appearing as it is written
                 }
             };
             return {

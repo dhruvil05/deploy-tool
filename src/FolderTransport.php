@@ -5,9 +5,37 @@ declare(strict_types=1);
 namespace DeployTool;
 
 /** A site that is a folder on this computer. Used to test deploys without touching a real server. */
-final class FolderTransport implements Transport
+final class FolderTransport implements Transport, CommandRunner
 {
     use OneByOne;
+
+    /** Runs a command in the folder on this computer (cmd on Windows, sh elsewhere). */
+    public function exec(string $command, string $input = '', ?string $outputFile = null): array
+    {
+        $inputFile = tempnam(sys_get_temp_dir(), 'dtcmd');
+        $out = $outputFile ?? tempnam(sys_get_temp_dir(), 'dtcmd');
+        $errorFile = tempnam(sys_get_temp_dir(), 'dtcmd');
+        file_put_contents($inputFile, $input);
+        try {
+            $process = proc_open($command, [0 => ['file', $inputFile, 'r'], 1 => ['file', $out, 'w'], 2 => ['file', $errorFile, 'w']], $pipes, $this->root);
+            if (!is_resource($process)) {
+                throw new \RuntimeException('Could not start the command.');
+            }
+            $code = proc_close($process);
+            return [$code, $outputFile === null ? (string) file_get_contents($out) : '', trim((string) file_get_contents($errorFile))];
+        } finally {
+            @unlink($inputFile);
+            @unlink($errorFile);
+            if ($outputFile === null) {
+                @unlink($out);
+            }
+        }
+    }
+
+    public function quote(string $argument): string
+    {
+        return PHP_OS_FAMILY === 'Windows' ? '"' . str_replace('"', '""', $argument) . '"' : escapeshellarg($argument);
+    }
 
     private readonly string $root;
 

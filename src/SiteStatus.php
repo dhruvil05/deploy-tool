@@ -30,18 +30,22 @@ final class SiteStatus
         ];
 
         if ($status['state'] !== null) {
+            // Two git calls instead of four (each ~0.1 s on Windows), for every site card.
             $git = Sites::git($site);
             $sha = $status['state']['commit'];
-            if ($git->resolve($sha) === null) {
+            $info = $git->commitInfoOf($sha);
+            if ($info === null) {
                 $status['commit'] = ['sha' => $sha];
             } else {
                 $status['commit_known'] = true;
-                $status['commit'] = $git->commitInfo($sha);
+                $status['commit'] = $info;
                 if ($sourceCommit !== null) {
-                    if ($git->isAncestor($sha, $sourceCommit)) {
-                        $status['behind'] = $git->countBetween($sha, $sourceCommit);
-                    } else {
+                    // Commits the site has that the source lacks mean it isn't simply behind.
+                    [$onlyOnSite, $behind] = $git->aheadBehind($info['sha'], $sourceCommit);
+                    if ($onlyOnSite > 0) {
                         $status['diverged'] = true;
+                    } else {
+                        $status['behind'] = $behind;
                     }
                 }
             }

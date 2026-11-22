@@ -37,7 +37,17 @@ final class Sites
         'path' => '',
         'url' => '',
         'check_path' => '/admin/authentication',
+        // Speed-ups "Commands after a deploy" and "Database backup" (SSH and folder sites).
+        'post_commands' => '',
+        'db_name' => '',
+        'db_user' => '',
+        'db_password' => '',
+        'db_host' => 'localhost',
+        'db_dump' => 'mysqldump',
     ];
+
+    /** Site fields kept encrypted on disk. */
+    private const SECRET_FIELDS = ['password', 'db_password'];
 
     /** Shown until the sites are saved for the first time. */
     private const DEFAULT_SITES = [
@@ -75,16 +85,16 @@ final class Sites
     private static function stored(): array
     {
         $sites = JsonStore::read('sites');
-        if (array_filter($sites, static fn (array $site): bool => Secrets::needsSealing($site, ['password']))) {
+        if (array_filter($sites, static fn (array $site): bool => Secrets::needsSealing($site, self::SECRET_FIELDS))) {
             self::write($sites);
         }
-        return array_map(static fn (array $site): array => Secrets::openFields($site, ['password']), $sites);
+        return array_map(static fn (array $site): array => Secrets::openFields($site, self::SECRET_FIELDS), $sites);
     }
 
     /** Saves sites.json with the FTP passwords sealed. */
     private static function write(array $sites): void
     {
-        JsonStore::write('sites', array_map(static fn (array $site): array => Secrets::sealFields($site, ['password']), $sites));
+        JsonStore::write('sites', array_map(static fn (array $site): array => Secrets::sealFields($site, self::SECRET_FIELDS), $sites));
     }
 
     public static function isSaved(): bool
@@ -425,12 +435,40 @@ final class Sites
             'path' => rtrim(trim((string) ($input['path'] ?? '')), '\\/'),
             'url' => rtrim(trim((string) ($input['url'] ?? '')), '/'),
             'check_path' => trim((string) ($input['check_path'] ?? '')),
+            'post_commands' => trim(implode("\n", array_filter(array_map('trim', preg_split('/\r?\n/', (string) ($input['post_commands'] ?? '')) ?: []), 'strlen'))),
+            'db_name' => trim((string) ($input['db_name'] ?? '')),
+            'db_user' => trim((string) ($input['db_user'] ?? '')),
+            'db_password' => (string) ($input['db_password'] ?? ''),
+            'db_host' => trim((string) ($input['db_host'] ?? '')) ?: 'localhost',
+            'db_dump' => trim((string) ($input['db_dump'] ?? '')) ?: 'mysqldump',
         ];
         if ($site['password'] === '' && $existing !== null) {
             $site['password'] = $existing['password'];
         }
+        if (!empty($input['db_password_remove'])) {
+            $site['db_password'] = '';
+        } elseif ($site['db_password'] === '' && $existing !== null) {
+            $site['db_password'] = $existing['db_password'] ?? '';
+        }
 
         $errors = [];
+        $commands = $site['post_commands'] === '' ? [] : explode("\n", $site['post_commands']);
+        if (count($commands) > 10 || array_filter($commands, static fn (string $c): bool => strlen($c) > 500) !== []) {
+            $errors['post_commands'] = 'Up to 10 commands of up to 500 characters each.';
+        }
+        if ($site['db_name'] !== '' && !preg_match('/^[\w$-]{1,64}$/', $site['db_name'])) {
+            $errors['db_name'] = 'Enter the database name (letters, numbers, _ $ or -).';
+        }
+        if ($site['db_name'] !== '' && !preg_match('/^[\w.@$-]{1,80}$/', $site['db_user'])) {
+            $errors['db_user'] = 'Enter the database user.';
+        }
+        if (!preg_match('/^[\w.:-]{1,253}$/', $site['db_host'])) {
+            $errors['db_host'] = 'Enter the database host, usually localhost.';
+        }
+        // The dump command is typed by the user only; it may hold a path with spaces and quotes, but nothing that chains commands.
+        if (preg_match('/[;&|<>`$\r\n]/', $site['db_dump'])) {
+            $errors['db_dump'] = 'Enter only the mysqldump program (a path is fine), without ; & | < > or $.';
+        }
         if (!preg_match('/^[a-z0-9][a-z0-9-]{1,39}$/', $site['key'])) {
             $errors['key'] = 'Use 2 to 40 lowercase letters, numbers or dashes.';
         } elseif ($originalKey === null && isset($sites[$site['key']])) {

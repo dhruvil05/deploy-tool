@@ -31,10 +31,13 @@ final class Process
         fclose($lock);
     }
 
-    /** Starts src/<app>-worker.php when the app's speed-up is on and it isn't running (any page load). */
-    public static function ensure(string $app): void
+    /**
+     * Starts src/<app>-worker.php when it should run (default: the app's "feature_<app>_bridge"
+     * speed-up is on) and it isn't running (any page load).
+     */
+    public static function ensure(string $app, ?bool $wanted = null): void
     {
-        if (!Settings::on("feature_{$app}_bridge") || self::isRunning($app)) {
+        if (!($wanted ?? Settings::on("feature_{$app}_bridge")) || self::isRunning($app)) {
             return;
         }
         $started = @filemtime(self::startedFile($app));

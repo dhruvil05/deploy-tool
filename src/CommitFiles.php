@@ -28,13 +28,37 @@ final class CommitFiles
     {
         $onlyTarget = $from === null || $from === $to || !$git->isAncestor($from, $to);
         $range = $onlyTarget ? null : "$from..$to";
-        $total = $range === null ? 1 : $git->countBetween($from, $to);
-        $commits = $range === null ? [$git->commitInfo($to)] : $git->recentCommits($range, self::LIMIT);
-        foreach ($commits as &$commit) {
-            $commit['files'] = self::filesOf($git, $commit['sha']);
-        }
-        unset($commit);
+        $commits = self::log($git, $range ?? $to, $range === null ? 1 : self::LIMIT);
+        $total = $range === null ? 1 : (count($commits) < self::LIMIT ? count($commits) : $git->countBetween($from, $to));
         return ['commits' => $commits, 'total' => $total, 'only_target' => $onlyTarget];
+    }
+
+    /**
+     * Commits with the files each changed (against its first parent), from one git call: a
+     * separate call per commit would cost ~0.1 s each on Windows.
+     *
+     * @return list<array{sha: string, subject: string, date: string, author: string, files: list<array{0: string, 1: string}>}>
+     */
+    private static function log(Git $git, string $range, int $limit): array
+    {
+        $output = $git->okRaw(['log', '-n', (string) $limit, '-m', '--first-parent', '--no-renames', '--name-status', '--format=%x1e%H%x1f%s%x1f%ci%x1f%an', $range, '--']);
+        $commits = [];
+        foreach (explode("\x1e", $output) as $block) {
+            $lines = explode("\n", trim($block, "\n"));
+            $head = array_shift($lines);
+            if ($head === null || !str_contains($head, "\x1f")) {
+                continue;
+            }
+            [$sha, $subject, $date, $author] = explode("\x1f", $head) + ['', '', '', ''];
+            $files = [];
+            foreach ($lines as $line) {
+                if (preg_match('/^([AMDTCRU])\d*\t(.+)$/', $line, $m)) {
+                    $files[] = [$m[1], $m[2]];
+                }
+            }
+            $commits[] = ['sha' => $sha, 'subject' => $subject, 'date' => $date, 'author' => $author, 'files' => $files];
+        }
+        return $commits;
     }
 
     /** @return list<array{0: string, 1: string}> [A/M/D, path] the files one commit changed (against its first parent) */
@@ -71,6 +95,9 @@ final class CommitFiles
      */
     public static function pull(array $source): string
     {
+        if (Sources::isManaged($source)) {
+            return Sources::fetch($source); // the tool's own copy: fetching moves it forward the same safe way
+        }
         $git = Sources::git($source);
         $branch = $source['branch'];
         $remote = $source['remote'];

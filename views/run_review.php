@@ -8,7 +8,6 @@
 use DeployTool\DeployRun;
 use DeployTool\Http;
 use DeployTool\ReviewInsights;
-use DeployTool\RunStore;
 
 $isRollback = $run['type'] === 'rollback';
 $uploads = array_filter($run['files'], static fn (array $f): bool => $f['action'] !== 'delete');
@@ -62,6 +61,19 @@ $buttonLabel = match (true) {
         <div class="notice notice-warning">
             <?= count($warnings) ?> file(s) are not what we expected on the server: edited directly on the server, already there, or missing.
             Use the Warnings filter and open <strong>Server edits</strong> to see what's different. Their current copies are in the backup either way.
+        </div>
+    <?php endif ?>
+
+    <?php // Speed-ups "Database backup" and "Commands after a deploy". ?>
+    <?php if (!empty($run['db_backup']['size'])): ?>
+        <p class="meta backup-line">Database <code><?= e($run['db_backup']['name']) ?></code> backed up (<?= e(number_format($run['db_backup']['size'] / 1024, 1)) ?> KB):
+            <a class="button small" href="index.php?r=db-backup-download&amp;id=<?= e(urlencode($run['id'])) ?>">Download .sql.gz</a></p>
+    <?php endif ?>
+    <?php if (!empty($run['commands'])): ?>
+        <div class="notice notice-info commands-notice">
+            <strong>After the upload, these commands run in the site's folder:</strong>
+            <ul><?php foreach ($run['commands'] as $command): ?><li><code><?= e($command) ?></code></li><?php endforeach ?></ul>
+            A failed command stops the run; the files stay deployed, and Roll back undoes them.
         </div>
     <?php endif ?>
 

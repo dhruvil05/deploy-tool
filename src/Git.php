@@ -7,18 +7,31 @@ namespace DeployTool;
 /** Read-only git commands against the project repository. */
 final class Git
 {
+    /** @param array<string, string> $env extra environment, e.g. credentials for a local from a Git address (never on the command line) */
     public function __construct(
         private readonly string $repo,
         private readonly string $binary,
+        private readonly array $env = [],
     ) {
+    }
+
+    /** The tool's own copy of a local from a Git address: no working folder, so nothing can be uncommitted. */
+    public function isBare(): bool
+    {
+        [$code, $stdout] = $this->run(['rev-parse', '--is-bare-repository']);
+        return $code === 0 && trim($stdout) === 'true';
     }
 
     /**
      * Runs git directly (no shell, so nothing in an argument is interpreted).
      * Returns [exit code, stdout, stderr].
      */
+    /** Git processes started by this PHP process. Each costs roughly 80–100 ms on Windows, so pages keep this low. */
+    public static int $calls = 0;
+
     public function run(array $args, ?string $input = null): array
     {
+        self::$calls++;
         // No automatic maintenance: git would start it in the background after a fetch, and on
         // Windows that background process keeps our output files open. Your own git still does it.
         $command = array_merge([$this->binary, '-C', $this->repo, '-c', 'core.quotepath=off', '-c', 'maintenance.auto=false', '-c', 'gc.auto=0'], $args);
@@ -28,7 +41,7 @@ final class Git
         $outputFile = tempnam(sys_get_temp_dir(), 'dtgit');
         $errorFile = tempnam(sys_get_temp_dir(), 'dtgit');
         file_put_contents($inputFile, (string) $input);
-        $env = array_merge(getenv(), ['GIT_TERMINAL_PROMPT' => '0']);
+        $env = array_merge(getenv(), ['GIT_TERMINAL_PROMPT' => '0', 'GCM_INTERACTIVE' => 'never'], $this->env);
 
         try {
             $process = proc_open($command, [0 => ['file', $inputFile, 'r'], 1 => ['file', $outputFile, 'w'], 2 => ['file', $errorFile, 'w']], $pipes, null, $env);
@@ -133,7 +146,7 @@ final class Git
 
     public function isRepo(): bool
     {
-        return $this->run(['rev-parse', '--is-inside-work-tree'])[0] === 0;
+        return $this->run(['rev-parse', '--is-inside-work-tree'])[0] === 0 || $this->isBare();
     }
 
     /** Full commit hash for a branch, tag or hash, or null if it doesn't exist. */
@@ -143,9 +156,37 @@ final class Git
         return $code === 0 ? trim($stdout) : null;
     }
 
+    /** The repository's .git folder, learned together with the branch (one git call for both). */
+    private ?string $gitDir = null;
+
     public function currentBranch(): string
     {
-        return $this->ok(['rev-parse', '--abbrev-ref', 'HEAD']);
+        [$dir, $branch] = array_pad(explode("\n", $this->ok(['rev-parse', '--absolute-git-dir', '--abbrev-ref', 'HEAD'])), 2, '');
+        $this->gitDir = trim($dir);
+        return trim($branch);
+    }
+
+    /**
+     * Commit details of a ref in one call, or null when the ref isn't there (where resolve()
+     * followed by commitInfo() would take two).
+     *
+     * @return array{sha: string, subject: string, date: string, author: string}|null
+     */
+    public function commitInfoOf(string $ref): ?array
+    {
+        [$code, $stdout] = $this->run(['log', '-1', '--format=%H%x1f%s%x1f%ci%x1f%an', $ref . '^{commit}', '--']);
+        if ($code !== 0 || trim($stdout) === '') {
+            return null;
+        }
+        [$sha, $subject, $date, $author] = explode("\x1f", trim($stdout)) + ['', '', '', ''];
+        return ['sha' => $sha, 'subject' => $subject, 'date' => $date, 'author' => $author];
+    }
+
+    /** @return array{0: int, 1: int} commits only in $a, and only in $b (one call for both directions) */
+    public function aheadBehind(string $a, string $b): array
+    {
+        [$ahead, $behind] = array_map('intval', preg_split('/\s+/', $this->ok(['rev-list', '--left-right', '--count', "$a...$b"])) + [0, 0]);
+        return [$ahead, $behind];
     }
 
     /** @return array{sha: string, subject: string, date: string, author: string} */
@@ -195,6 +236,9 @@ final class Git
     public function uncommittedFiles(): array
     {
         [$code, $stdout, $stderr] = $this->run(['status', '--porcelain', '--untracked-files=no']);
+        if ($code !== 0 && str_contains($stderr, 'work tree')) {
+            return []; // the tool's own (bare) copy of a Git address: nothing can be uncommitted
+        }
         if ($code !== 0) {
             throw new \RuntimeException('git status failed: ' . $stderr);
         }
@@ -293,7 +337,7 @@ final class Git
 
     public function lastFetchTime(): ?int
     {
-        $file = $this->ok(['rev-parse', '--absolute-git-dir']) . '/FETCH_HEAD';
+        $file = ($this->gitDir ?? $this->ok(['rev-parse', '--absolute-git-dir'])) . '/FETCH_HEAD';
         return is_file($file) ? (int) filemtime($file) : null;
     }
 }
