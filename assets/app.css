@@ -1321,3 +1321,27 @@ input.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2
 }
 .radio-card > .repo-kind-icon { display: grid; place-items: center; gap: 0; } /* not the card's text column */
 .radio-card > .repo-kind-icon svg { display: block; }
+
+/* Speed-up "Compare only some commits" */
+.scope-cards { margin-bottom: 4px; }
+.pick-commits { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 460px; overflow-y: auto; }
+.pick-commits > li { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
+.pick-commits > li:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.pick-commit { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.pick-commit input { margin: 4px 0 0; flex: none; }
+.pick-commit-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pick-commit-text strong { overflow-wrap: anywhere; }
+.pick-commit-text .meta { margin: 0; font-size: 12.5px; }
+.pick-commit-files { margin: 6px 0 0 26px; font-size: 13px; }
+.pick-commit-files summary { cursor: pointer; color: var(--muted); }
+.pick-commit-files ul { margin: 6px 0 0; padding-left: 16px; }
+.pick-commit-files code { overflow-wrap: anywhere; }
+.shared-files p { margin: 0 0 6px; }
+.shared-files ul { margin: 0 0 10px; padding-left: 18px; }
+.shared-files li { overflow-wrap: anywhere; }
+.shared-files form { margin: 0; }
+.outside-selection { margin-bottom: 16px; }
+.outside-selection > summary { cursor: pointer; }
+.outside-selection form { margin: 10px 0 0; }
+.outside-selection .pick-commits { margin-bottom: 10px; }
+.outside-none { margin: 8px 0 0; }

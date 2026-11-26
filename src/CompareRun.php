@@ -23,13 +23,56 @@ final class CompareRun
         'helper_upload' => 'Upload the fingerprint file',
         'helper_call' => 'Fingerprint the server',
         'helper_delete' => 'Delete the fingerprint file',
+        'scoped' => "Read the commits' files",
         'analyze' => 'Compare with the commit',
     ];
 
-    public static function create(array $site, string $commit, string $method): array
+    /**
+     * Speed-up "Compare only some commits": a compare of just the files the ticked commits
+     * changed, read one by one (no helper file, no walk of the whole site). Compared with the
+     * newest ticked commit; files it deleted show as extra, to be deleted if you tick them.
+     */
+    public static function createScoped(array $site, array $commits): array
+    {
+        if (!Settings::on('feature_commit_compare')) {
+            throw new \RuntimeException('Comparing only some commits is switched off (Settings → Speed-ups).');
+        }
+        $git = Sites::git($site);
+        $wanted = [];
+        foreach (array_unique(array_filter($commits, 'is_string')) as $commit) {
+            $sha = $git->resolve($commit);
+            if ($sha === null) {
+                throw new \RuntimeException('Commit ' . substr($commit, 0, 12) . ' is not in your repository.');
+            }
+            $wanted[$sha] = true;
+        }
+        if ($wanted === []) {
+            throw new \RuntimeException('Tick at least one commit to compare.');
+        }
+        // Newest first, in history order (one git call over the commits and their history).
+        $ordered = array_values(array_filter(explode("\n", trim($git->ok(array_merge(['log', '--format=%H', '--topo-order', '-n', '5000'], array_keys($wanted))))), static fn (string $sha): bool => isset($wanted[$sha])));
+        $ordered = array_values(array_unique(array_merge($ordered, array_keys($wanted))));
+        $paths = [];
+        foreach ($ordered as $sha) {
+            foreach (CommitFiles::filesOf($git, $sha) as [, $path]) {
+                $paths[$path] = true;
+            }
+        }
+        if ($paths === []) {
+            throw new \RuntimeException('These commits change no files.');
+        }
+        if (count($paths) > 1000) {
+            throw new \RuntimeException('These commits change ' . count($paths) . ' files: compare the whole site instead.');
+        }
+        ksort($paths);
+        return self::create($site, $ordered[0], 'fingerprint', ['commits' => $ordered, 'paths' => array_map('strval', array_keys($paths))]);
+    }
+
+    public static function create(array $site, string $commit, string $method, ?array $scope = null): array
     {
         $method = $site['type'] === 'ftp' && $method === 'sizes' ? 'sizes' : 'fingerprint';
         $first = match (true) {
+            $scope !== null => 'scoped',
             $site['type'] === 'ssh' => 'remote',
             $site['type'] === 'ftp' && $method === 'fingerprint' => 'helper_upload',
             default => 'walk',
@@ -46,6 +89,9 @@ final class CompareRun
             'finished_at' => null,
         ];
         $run['to'] = $commit;
+        if ($scope !== null) {
+            $run['scope'] = $scope + ['read' => 0];
+        }
         RunStore::save($run);
         return $run;
     }
@@ -54,6 +100,7 @@ final class CompareRun
     public static function phases(array $run): array
     {
         $keys = match (true) {
+            isset($run['scope']) => ['scoped', 'analyze'],
             $run['site_type'] === 'ssh' => ['remote', 'analyze'],
             $run['site_type'] === 'ftp' && $run['method'] === 'fingerprint' => ['helper_upload', 'helper_call', 'helper_delete', 'analyze'],
             default => ['walk', 'analyze'],
@@ -69,8 +116,122 @@ final class CompareRun
             'helper_upload' => self::helperUpload($run, $context),
             'helper_call' => self::helperCall($run, $context),
             'helper_delete' => self::helperDelete($run, $context),
+            'scoped' => self::readScoped($run, $context, $deadline),
             'analyze' => self::analyze($run, $context),
         };
+    }
+
+    /** A compare of only some commits: reads just their files from the server, a batch at a time. */
+    private static function readScoped(array &$run, RunContext $context, float $deadline): void
+    {
+        $regexes = $context->protectedRegexes();
+        $transport = $context->transport();
+        $paths = array_values(array_filter($run['scope']['paths'], static fn (string $p): bool => !ProtectedPaths::matches($p, $regexes)));
+        while ($run['scope']['read'] < count($paths)) {
+            if (microtime(true) >= $deadline) {
+                return;
+            }
+            $batch = array_slice($paths, $run['scope']['read'], $transport->batchSize());
+            foreach ($transport->getMany($batch) as $path => $contents) {
+                if ($contents !== null) {
+                    $normal = str_replace("\r\n", "\n", $contents);
+                    $run['server'][(string) $path] = ['sha' => Fingerprint::blobSha($contents), 'nsha' => $normal !== $contents ? Fingerprint::blobSha($normal) : null, 'size' => strlen($contents)];
+                }
+            }
+            $run['scope']['read'] += count($batch);
+        }
+        Runner::log($run, 'info', 'Read ' . count($paths) . ' file(s) of ' . count($run['scope']['commits']) . ' commit(s) on the server (' . count($run['server']) . ' there).');
+        $run['phase'] = 'analyze';
+    }
+
+    /**
+     * For a compare of only some commits: files the ticked commits change that other commits
+     * also change, between the server's recorded version and the newest ticked one. Uploading
+     * such a file brings those other commits' changes to it too.
+     *
+     * @return array{known: bool, paths?: array<string, list<string>>, commits?: array<string, string>}
+     */
+    private static function sharedChanges(Git $git, array $run, array $sendable): array
+    {
+        $base = $run['server_commit'] ?? null;
+        if ($base === null || $git->resolve($base) === null || !$git->isAncestor($base, $run['to'])) {
+            return ['known' => false]; // no recorded version, or not in this history: nothing to go by
+        }
+        $picked = array_flip($run['scope']['commits']);
+        $scope = array_flip($sendable); // only files a match would send: one already the same doesn't matter
+        $paths = [];
+        $commits = [];
+        foreach (CommitFiles::log($git, "$base..{$run['to']}", 2000) as $commit) {
+            if (isset($picked[$commit['sha']])) {
+                continue;
+            }
+            foreach ($commit['files'] as [, $path]) {
+                if (isset($scope[$path])) {
+                    $paths[$path][] = $commit['sha'];
+                    $commits[$commit['sha']] = $commit['subject'];
+                }
+            }
+        }
+        ksort($paths);
+        return ['known' => true, 'paths' => $paths, 'commits' => $commits];
+    }
+
+    /** The most commits kept in the "Not in your selection" list (the files are still counted). */
+    public const OUTSIDE_COMMITS = 100;
+
+    /**
+     * Speed-up "Files outside the picked commits": the commits the server still lacks (from its
+     * recorded version to the newest commit the site gets code from) that weren't picked, each
+     * with its files that the compare didn't cover. From git alone: nothing is read from the server.
+     *
+     * @return array{known: bool, head?: string, files?: int, total?: int, commits?: list<array{sha: string, subject: string, author: string, date: string, files: list<array{0: string, 1: string}>}>}
+     */
+    private static function outsideSelection(Git $git, array $run, array $site, array $regexes): array
+    {
+        $base = $run['server_commit'] ?? null;
+        $head = $run['to'];
+        try {
+            $newest = DeployRun::sourceCommit($site, $git);
+            if ($newest !== $head && $git->isAncestor($head, $newest)) {
+                $head = $newest;
+            }
+        } catch (\RuntimeException) {
+            // the site's source is gone: the newest picked commit is as far as it goes
+        }
+        if ($base === null || $git->resolve($base) === null || !$git->isAncestor($base, $head)) {
+            return ['known' => false];
+        }
+        $picked = array_flip($run['scope']['commits']);
+        $covered = array_flip($run['scope']['paths']);
+        $commits = [];
+        $files = [];
+        $total = 0;
+        foreach (CommitFiles::log($git, "$base..$head", 5000) as $commit) {
+            if (isset($picked[$commit['sha']])) {
+                continue;
+            }
+            $left = array_values(array_filter($commit['files'], static fn (array $file): bool => !isset($covered[$file[1]]) && !ProtectedPaths::matches($file[1], $regexes)));
+            if ($left === []) {
+                continue; // all its files were compared (they show in the "also changed" warning)
+            }
+            $total++;
+            foreach ($left as [, $path]) {
+                $files[$path] = true;
+            }
+            if (count($commits) < self::OUTSIDE_COMMITS) {
+                $commits[] = ['sha' => $commit['sha'], 'subject' => $commit['subject'], 'author' => $commit['author'], 'date' => $commit['date'], 'files' => $left];
+            }
+        }
+        return ['known' => true, 'head' => $head, 'files' => count($files), 'total' => $total, 'commits' => $commits];
+    }
+
+    /**
+     * Of $paths (files a match would send), the ones that also hold changes from commits
+     * that weren't picked on a compare of only some commits: path => [commit sha, …].
+     */
+    public static function sharedIn(array $compare, array $paths): array
+    {
+        return array_intersect_key($compare['result']['shared']['paths'] ?? [], array_flip($paths));
     }
 
     /** Writes the compared commit to the server as its recorded version. */
@@ -79,6 +240,9 @@ final class CompareRun
         $site = Sites::get($compare['site']) ?? throw new \RuntimeException('This site no longer exists.');
         if ($compare['status'] !== 'done') {
             throw new \RuntimeException('This compare has not finished.');
+        }
+        if (isset($compare['scope'])) {
+            throw new \RuntimeException('A compare of only some commits looked at a few files, so it can\'t say the server runs that commit.');
         }
         $issues = count($compare['result']['differs']) + count($compare['result']['missing']);
         if ($issues > 0 && !$acknowledged) {
@@ -94,15 +258,14 @@ final class CompareRun
     }
 
     /**
-     * A "match" run that uploads the files the compare found different or missing.
-     * $selected limits it to the paths ticked on the result (null = every different or
-     * missing file); only paths the compare listed count, whatever the form sends.
+     * "Make it match": a run that uploads the files the compare found different or missing
+     * and, with the speed-up "Delete extra server files", deletes the ticked extra ones
+     * ($deletes). $selected limits it to the paths ticked on the result (null = every
+     * different or missing file); only paths the compare listed count, whatever the form
+     * sends. After a compare of only some commits the run is partial: the site's recorded
+     * version stays (DeployRun::record).
      */
-    /**
-     * "Make it match": a run that uploads the ticked files from the commit and, with the
-     * speed-up "Delete extra server files", deletes the ticked extra ones ($deletes).
-     */
-    public static function createSync(array $compare, ?array $selected, bool $includeLineEndings = false, array $deletes = []): array
+    public static function createSync(array $compare, ?array $selected, bool $includeLineEndings = false, array $deletes = [], bool $sharedChecked = false): array
     {
         $site = Sites::get($compare['site']) ?? throw new \RuntimeException('This site no longer exists.');
         $deleting = self::deletesFor($compare, $site, $deletes);
@@ -130,10 +293,20 @@ final class CompareRun
         if ($files === [] && $selected !== null && ($compare['result']['differs'] || $compare['result']['missing'] || $compare['result']['eol'])) {
             throw new \RuntimeException('No file is ticked. Tick the files to upload, or use "Record version" instead.');
         }
-        if ($files === []) {
-            throw new \RuntimeException('Nothing to upload: the server already matches. Use "Record version" instead.');
+        // Files that also hold changes from commits that weren't picked ("Compare only some commits").
+        $shared = self::sharedIn($compare, array_column($files, 'path'));
+        if ($shared !== [] && !$sharedChecked) {
+            throw new \RuntimeException(count($shared) . ' file(s) also hold changes from commits you didn\'t pick. Tick the box to send them anyway, or include those commits.');
         }
-        return DeployRun::create($site, 'sync', null, $files, $compare['to'], $compare['id']);
+        if ($files === []) {
+            throw new \RuntimeException(isset($compare['scope']) ? 'Nothing to upload: the server already has these commits\' files.' : 'Nothing to upload: the server already matches. Use "Record version" instead.');
+        }
+        $run = DeployRun::create($site, 'sync', null, $files, $compare['to'], $compare['id']);
+        if (isset($compare['scope'])) {
+            $run['partial'] = ['commits' => $compare['scope']['commits']]; // the recorded version stays (DeployRun::record)
+            RunStore::save($run);
+        }
+        return $run;
     }
 
     /**
@@ -252,7 +425,7 @@ final class CompareRun
     {
         // Speed-up "Files of each commit": the version the server says it runs, so the compare
         // page can list the commits between it and the compared one. Only a note: never fails.
-        if (Settings::on('feature_commit_files') && !array_key_exists('server_commit', $run)) {
+        if ((Settings::on('feature_commit_files') || isset($run['scope'])) && !array_key_exists('server_commit', $run)) {
             try {
                 $run['server_commit'] = ServerState::parse(ServerState::readRaw($context->transport()))['commit'] ?? null;
             } catch (\Throwable) {
@@ -261,6 +434,9 @@ final class CompareRun
         }
         $regexes = $context->protectedRegexes();
         $tree = array_filter($context->git()->tree($run['to']), static fn ($path): bool => !ProtectedPaths::matches((string) $path, $regexes), ARRAY_FILTER_USE_KEY);
+        if (isset($run['scope'])) {
+            $tree = array_intersect_key($tree, array_flip($run['scope']['paths'])); // only the ticked commits' files
+        }
         $server = $run['server'];
         $result = ['method' => $run['method'], 'same' => 0, 'eol' => [], 'differs' => [], 'missing' => [], 'extra' => [], 'tree_files' => count($tree), 'server_files' => count($server)];
 
@@ -290,6 +466,12 @@ final class CompareRun
         }
         foreach (['eol', 'differs', 'missing', 'extra'] as $list) {
             sort($result[$list]);
+        }
+        if (isset($run['scope'])) {
+            $result['shared'] = self::sharedChanges($context->git(), $run, array_merge($result['differs'], $result['missing'], $result['eol']));
+            if (Settings::on('feature_outside_selection')) {
+                $result['outside'] = self::outsideSelection($context->git(), $run, $context->site, $regexes);
+            }
         }
 
         $run['result'] = $result;

@@ -10,6 +10,7 @@ use DeployTool\CompareRun;
 use DeployTool\DeployRun;
 use DeployTool\DiffView;
 use DeployTool\LocalStatus;
+use DeployTool\Partials;
 use DeployTool\ProtectedPaths;
 use DeployTool\RollbackRun;
 use DeployTool\Runner;
@@ -53,13 +54,17 @@ final class Tools
             ['name' => 'start_compare', 'description' => 'Starts a compare: which server files match a commit, differ, or are missing or extra. Changes no site file (on FTP sites the fingerprint method briefly uploads, calls and deletes a small helper file). Runs in the background: follow with wait_for_run.', 'parameters' => ['properties' => [
                 'site' => $site,
                 'commit' => ['type' => 'string', 'description' => 'Commit, branch or tag. Default: the commit this site gets from its local or source site.'],
-                'method' => ['type' => 'string', 'enum' => ['fingerprint', 'sizes'], 'description' => 'FTP sites only. Default: the one set in Settings.'],
-            ], 'required' => ['site']]],
+                'method' => ['type' => 'string', 'enum' => ['fingerprint', 'sizes'], 'description' => 'How to read an FTP site: fingerprint (exact, seconds; a small helper file is uploaded, called and deleted) or sizes (rough, minutes; uploads nothing). FTP sites only, and not with commits. Default: the one set in Settings.'],
+            ] + (Settings::on('feature_commit_compare') ? [
+                'commits' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Compare only the files these commits changed (from commits_not_on_site), against the newest of them, instead of the whole site: seconds, e.g. one hotfix. Leave out to compare the whole site.'],
+            ] : []), 'required' => ['site']]],
+            ['name' => 'commits_not_on_site', 'description' => 'Reads the version a site runs (a few seconds) and lists the commits it does not have yet, newest first, each with the files it changed: to pick commits for start_compare. When the version is unknown, the latest 20 commits.', 'parameters' => ['properties' => ['site' => $site], 'required' => ['site']]],
             ['name' => 'prepare_deploy', 'description' => "Prepares a deploy of the commit a site gets: safety checks, a PHP syntax check and a backup of the server's files, then it stops at the review. Nothing on the server changes until the user approves the review on its page. Ask the user first for a production site. Follow with wait_for_run.", 'parameters' => ['properties' => ['site' => $site], 'required' => ['site']]],
             ['name' => 'prepare_match', 'description' => 'From a finished compare, prepares uploading the files that differ or are missing on the server ("Make it match"), or only the paths given. Like a deploy it stops at the review for the user to approve. Ask the user first for a production site. Follow with wait_for_run.', 'parameters' => ['properties' => [
                 'compare_run_id' => ['type' => 'string'],
                 'paths' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Only these files. Default: every different and missing file.'],
                 'include_line_endings' => ['type' => 'boolean', 'description' => 'Also upload files that differ only in line endings. Default false.'],
+                'shared_files_checked' => ['type' => 'boolean', 'description' => 'For a compare of only some commits: true only if the user was told which files also hold changes from commits they did not pick (get_run lists them) and still wants them sent. Default false.'],
             ], 'required' => ['compare_run_id']]],
             ['name' => 'set_compare_ticks', 'description' => 'Ticks or unticks files on a finished compare, the same as the user clicking the boxes on its page. It starts nothing: the compare page opens with these ticks, and prepare_match without paths uses them. Use this whenever the user says tick or untick about a compare.', 'parameters' => ['properties' => [
                 'compare_run_id' => ['type' => 'string'],
@@ -168,7 +173,8 @@ final class Tools
     public static function allowedDefinitions(): array
     {
         return array_values(array_filter(self::definitions(), static fn (array $tool): bool => (!isset(self::NEEDS[$tool['name']]) || Ai::can(self::NEEDS[$tool['name']]))
-            && ($tool['name'] !== 'pull_local' || Settings::on('feature_git_pull'))));
+            && ($tool['name'] !== 'pull_local' || Settings::on('feature_git_pull'))
+            && ($tool['name'] !== 'commits_not_on_site' || Settings::on('feature_commit_compare'))));
     }
 
     /**
@@ -235,6 +241,7 @@ final class Tools
                 'local_status' => [self::localStatus(self::text($arguments, 'local')), null],
                 'site_status' => [self::siteStatus(self::site($arguments)), null],
                 'deploy_preview' => [self::deployPreview(self::site($arguments)), null],
+                'commits_not_on_site' => [self::commitsNotOnSite(self::site($arguments)), null],
                 'list_runs' => [self::listRuns($arguments), 'index.php?r=history'],
                 'get_run' => self::getRun(self::text($arguments, 'run_id')),
                 'file_changes' => self::fileChanges(self::text($arguments, 'run_id'), self::text($arguments, 'path')),
@@ -335,7 +342,8 @@ final class Tools
             'list_runs' => 'Read the history' . (isset($arguments['site']) ? ' of ' . $siteName() : ''),
             'get_run' => 'Opened run ' . (string) ($arguments['run_id'] ?? '?'),
             'file_changes' => 'Read the changes in ' . basename((string) ($arguments['path'] ?? '?')),
-            'start_compare' => 'Started a compare of ' . $siteName(),
+            'start_compare' => 'Started a compare of ' . (!empty($arguments['commits']) ? count((array) $arguments['commits']) . ' commit(s) on ' : '') . $siteName(),
+            'commits_not_on_site' => 'Listed the commits ' . $siteName() . ' doesn\x27t have',
             'prepare_deploy' => 'Prepared a deploy to ' . $siteName(),
             'prepare_match' => 'Prepared "Make it match"' . (isset($arguments['paths']) ? ' for ' . count((array) $arguments['paths']) . ' file(s)' : ''),
             'wait_for_run' => 'Waited for run ' . (string) ($arguments['run_id'] ?? '?'),
@@ -362,6 +370,11 @@ final class Tools
     /** @return array{0: array, 1: string} */
     private static function startCompare(array $site, array $arguments): array
     {
+        // Speed-up "Compare only some commits": just those commits' files (CompareRun::createScoped checks the switch).
+        $commits = array_values(array_filter((array) ($arguments['commits'] ?? []), static fn ($c): bool => is_string($c) && trim($c) !== ''));
+        if ($commits !== []) {
+            return self::started(CompareRun::createScoped($site, array_map('trim', $commits)));
+        }
         $git = Sites::git($site);
         $wanted = trim((string) ($arguments['commit'] ?? ''));
         $sha = $wanted === '' ? DeployRun::sourceCommit($site, $git) : ($git->resolve($wanted) ?? throw new \RuntimeException("$wanted was not found in the repository."));
@@ -391,7 +404,51 @@ final class Tools
         if ($paths !== null && ($unknown = array_diff($paths, $listed)) !== []) {
             throw new \RuntimeException('Not in this compare\'s different, missing or line-ending lists: ' . implode(', ', array_slice($unknown, 0, 10)) . '. Use get_run for the exact paths.');
         }
-        return self::started(CompareRun::createSync($compare, $paths, !empty($arguments['include_line_endings'])));
+        // A compare of only some commits: files that would also bring other commits' changes
+        // need the user's yes, which the model passes as shared_files_checked.
+        $sending = $paths ?? array_merge($compare['result']['differs'], $compare['result']['missing'], !empty($arguments['include_line_endings']) ? $compare['result']['eol'] : []);
+        $shared = CompareRun::sharedIn($compare, $sending);
+        if ($shared !== [] && empty($arguments['shared_files_checked'])) {
+            throw new \RuntimeException(count($shared) . ' file(s) also hold changes from commits the user did not pick, so sending them brings those changes too: '
+                . implode('; ', self::sharedLines($compare, $shared))
+                . '. Tell the user and ask: include those commits (start_compare again with them added to commits) or send anyway (prepare_match with shared_files_checked true, only after they say so).');
+        }
+        return self::started(CompareRun::createSync($compare, $paths, !empty($arguments['include_line_endings']), [], !empty($arguments['shared_files_checked'])));
+    }
+
+    /** The "Not in your selection" list of a compare of only some commits, kept short for the model. */
+    private static function outsideSummary(array $outside): array|string
+    {
+        if (empty($outside['known'])) {
+            return 'Unknown: the server has no recorded version in this history, so the commits it still lacks can\'t be listed.';
+        }
+        $commits = [];
+        foreach (array_slice($outside['commits'], 0, 20) as $commit) {
+            $commits[] = [
+                'commit' => short_sha($commit['sha']),
+                'subject' => $commit['subject'],
+                'files' => array_map(static fn (array $f): string => "{$f[0]} {$f[1]}", array_slice($commit['files'], 0, 20)),
+                'file_count' => count($commit['files']),
+            ];
+        }
+        return [
+            'note' => 'Files the server still lacks from commits that were not picked, from git (not read on the server). "Make it match" does not send them; start_compare with these commits added to compare them too.',
+            'up_to' => short_sha($outside['head']),
+            'file_count' => $outside['files'],
+            'commit_count' => $outside['total'],
+            'commits' => $commits,
+        ];
+    }
+
+    /** @return list<string> "path (also changed by abc1234 "subject")" for each shared file */
+    private static function sharedLines(array $compare, array $shared): array
+    {
+        $commits = $compare['result']['shared']['commits'] ?? [];
+        $lines = [];
+        foreach (array_slice($shared, 0, 20, true) as $path => $shas) {
+            $lines[] = $path . ' (also changed by ' . implode(', ', array_map(static fn (string $sha): string => short_sha($sha) . ' "' . ($commits[$sha] ?? '') . '"', $shas)) . ')';
+        }
+        return $lines;
     }
 
     /**
@@ -957,6 +1014,46 @@ final class Tools
         ];
     }
 
+    /** Speed-up "Compare only some commits": the commits a site doesn't have, to pick for start_compare. */
+    private static function commitsNotOnSite(array $site): array
+    {
+        if (!Settings::on('feature_commit_compare')) {
+            throw new \RuntimeException('Comparing only some commits is switched off (Settings → Speed-ups).');
+        }
+        $git = Sites::git($site);
+        $target = DeployRun::sourceCommit($site, $git);
+        $problem = null;
+        try {
+            $has = ServerState::read(Sites::transport($site))['commit'] ?? null;
+        } catch (\RuntimeException $e) {
+            [$has, $problem] = [null, $e->getMessage()];
+        }
+        $known = $has !== null && $git->resolve($has) !== null && $git->isAncestor($has, $target);
+        $commits = match (true) {
+            !$known => CommitFiles::log($git, $target, 20),
+            $git->resolve($has) === $target => [],
+            default => CommitFiles::between($git, $has, $target)['commits'],
+        };
+        $partial = Partials::of($site['key']);
+        return [
+            'site_version' => $has !== null ? short_sha($has) : null,
+            'version_known' => $known,
+            'problem_reading_server' => $problem,
+            'gets' => short_sha($target),
+            'commits' => array_map(static fn (array $c): array => [
+                'commit' => short_sha($c['sha']),
+                'subject' => $c['subject'],
+                'author' => $c['author'],
+                'date' => substr($c['date'], 0, 16),
+                'file_count' => count($c['files']),
+                'files' => array_map(static fn (array $f): string => $f[0] . ' ' . $f[1], array_slice($c['files'], 0, 40)),
+            ], array_slice($commits, 0, 30)),
+            'sent_by_partial_matches' => $partial === [] ? null : array_slice(array_keys($partial), 0, 50),
+            'note' => ($known ? ($commits === [] ? 'The site already has every commit. ' : 'Newest first. ') : 'The site\'s version is unknown, so these are the latest 20 commits; any may already be on it. ')
+                . 'A = new, M = changed, D = removed in git. Pass the commits to start_compare.',
+        ];
+    }
+
     private static function listRuns(array $arguments): array
     {
         $limit = max(1, min(30, (int) ($arguments['limit'] ?? 10)));
@@ -1007,6 +1104,21 @@ final class Tools
                 $list = $run['result'][$key] ?? [];
                 $data[$label] = ['count' => count($list), 'paths' => array_slice($list, 0, $key === 'eol' ? 20 : 60)];
             }
+            if (isset($run['scope'])) { // "Compare only some commits"
+                $shared = $run['result']['shared'] ?? ['known' => false];
+                $data['only_commits'] = array_map('short_sha', $run['scope']['commits']);
+                $data['files_compared'] = count($run['scope']['paths']);
+                $data['extra_on_server']['note'] = 'Files these commits deleted that are still on the server.';
+                $data['shared_with_other_commits'] = $shared['known']
+                    ? self::sharedLines($run, $shared['paths'])
+                    : 'Unknown: the server has no recorded version in this history, so other commits may also have changed these files.';
+                if (isset($run['result']['outside'])) { // speed-up "Files outside the picked commits"
+                    $data['not_in_selection'] = self::outsideSummary($run['result']['outside']);
+                }
+                $data['note'] = 'A partial compare: "Make it match" sends only these files and the server\'s recorded version stays; record_version is not possible.';
+            }
+        } elseif (!empty($run['partial'])) {
+            $data['partial_match_of_commits'] = array_map('short_sha', $run['partial']['commits']);
         } else {
             $data['files'] = array_map(static fn (array $f): array => array_filter([
                 'path' => $f['path'],

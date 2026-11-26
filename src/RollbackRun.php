@@ -203,6 +203,7 @@ final class RollbackRun
     {
         ServerState::restore($context->transport(), $run['restore_state_raw']);
         $run['new_state_raw'] = $run['restore_state_raw'];
+        Partials::forgetRun($run['site'], (string) $run['rollback_of']); // a partial match undone: its files are as before
         Runner::log($run, 'info', $run['restore_state_raw'] === null ? 'Removed the recorded version (there was none before).' : 'Restored the earlier recorded version.');
         $run['phase'] = 'site_check';
     }

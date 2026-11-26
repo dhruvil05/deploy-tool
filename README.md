@@ -96,6 +96,29 @@ deploys in one go"). Off, the tool works exactly as before.
   uploaded one by one as usual. Needs the site address. Off by default because on some shared
   hosts PHP writes files as another user, and later FTP uploads can't replace them: try it on
   one deploy first.
+- **Compare only some commits:** on the compare page, **What to compare → Only some commits**
+  lists the commits the site doesn't have yet (or the latest 20 when its version isn't known).
+  Tick one or more, say a hotfix on staging, and only the files those commits changed are read
+  from the server and compared with the newest ticked commit; files they deleted show under
+  **Removed by these commits**. "Make it match" then sends just those files: a *partial match*.
+  - If a commit you didn't tick also changed one of those files (between the server's version
+    and the ticked commit), the page names it, offers **Include that commit too**, and asks you
+    to tick a box before sending anyway, since the file would bring that change too.
+  - **Files outside the picked commits** (its own switch): under **Not in your selection** the
+    page lists the files the site still lacks from the commits you didn't tick, between its
+    recorded version and the newest commit it gets code from, grouped by commit. It comes from
+    git alone, so nothing more is read from the server. Tick some of those commits and
+    **Compare again with the ticked commits added**. The assistant's `get_run` shows the same list.
+  - The server's recorded version stays as it was (the site isn't on any one commit then), so
+    the next normal deploy still brings everything else. It knows the files the partial match
+    sent and shows them as **Sent by a partial match**, not "Edited on server"; a file changed
+    by hand afterwards is still flagged. A full deploy or match starts afresh, and rolling back
+    the partial match forgets it.
+  - "Record version only" isn't offered for these compares, since only a few files were read.
+  - The AI assistant can do it too (also from Discord and Slack), under the "Start compares"
+    permission: it lists the commits a site doesn't have, compares just the ones you name
+    ("compare only the hotfix on prod"), and asks you before a match sends files that other
+    commits also changed. `/compare prod f16451a8 9c1e2d3` does the same without the AI.
 - **Smarter checks after a deploy:** a site's check page can list several pages separated by
   commas (`/, /login, /api/health`). Each is measured before anything changes and again after;
   a page that breaks, changes its status or gets much slower is named, with **Roll back** right
@@ -108,7 +131,7 @@ deploys in one go"). Off, the tool works exactly as before.
   summary: what changes, risks, database steps and what to check afterwards. Sends the file
   list and the diffs of the most changed files, only when clicked.
 - **Quick commands in the chat:** `/status`, `/status staging`, `/compare staging`,
-  `/deploy staging`, `/history`, `/help` run at once without the AI: instant, free, and they
+  `/compare staging <commit ids>` (only those commits' files), `/deploy staging`, `/history`, `/help` run at once without the AI: instant, free, and they
   work while the provider is down. The same AI permissions apply.
 - **Answers appear as they're written:** the assistant's answer shows word by word. Providers
   that can't stream answer the normal way.

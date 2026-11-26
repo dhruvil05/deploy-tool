@@ -307,6 +307,20 @@
         }));
     }
 
+    // Compare page (speed-up "Compare only some commits"): the whole site or ticked commits;
+    // the other mode's steps hide, and their required fields stop being required.
+    document.querySelectorAll('.js-compare-scope input').forEach((radio) => radio.addEventListener('change', () => {
+        document.querySelectorAll('.js-scope-group').forEach((group) => {
+            const shown = group.dataset.scope === radio.value;
+            group.hidden = !shown;
+            group.querySelectorAll('input, select').forEach((input) => {
+                if (input.name === 'commit') {
+                    input.required = shown;
+                }
+            });
+        });
+    }));
+
     // Edit local (speed-up "Locals from a Git address"): folder or Git address; the other's fields hide.
     document.querySelectorAll('.js-repo-kinds input').forEach((radio) => radio.addEventListener('change', () => {
         document.querySelectorAll('.js-repo-kind').forEach((group) => {

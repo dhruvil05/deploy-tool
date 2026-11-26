@@ -41,6 +41,8 @@ final class Settings
         'feature_uptime' => ['Uptime and certificate monitor', 'Every few minutes (set below) each site with an address loads its check pages and reads its HTTPS certificate. You hear when a site goes down, when it is back, and while its certificate ends within 14 days; the site\'s card shows its state. Off by default.', 'Off: sites are only checked after a deploy.'],
         'feature_post_commands' => ['Commands after a deploy', 'SSH and folder sites can list commands (on the site\'s page), such as composer install or php artisan migrate. They show at the review and run on the server after the upload; their output is in the log and a failed command stops the run.', 'Off: no commands run, even when a site lists some.'],
         'feature_db_backup' => ['Database backup before a deploy', 'SSH and folder sites with a database set on their page get a database copy (mysqldump) with the file backup, before anything changes. It is kept with the run and can be downloaded from its page.', 'Off: only files are backed up.'],
+        'feature_commit_compare' => ['Compare only some commits', 'On a site\'s Compare page, tick commits instead of comparing the whole site: only the files those commits changed are read and compared, in seconds. "Make it match" then sends just those (a hotfix to prod without what is still waiting on staging). If another commit you didn\'t tick also changed one of those files, you are told and can include it. The site\'s recorded version stays as it was, so the next normal deploy brings the rest, and knows the files sent.', 'Off: compares read the whole site.'],
+        'feature_outside_selection' => ['Files outside the picked commits', 'After a compare of only some commits, a list of the files the site still lacks from the commits you didn\'t pick (between its recorded version and the newest commit it gets code from), grouped by commit. It comes from git alone: nothing more is read from the server. One click compares those commits too. Needs "Compare only some commits".', 'Off: only the picked commits\' files are shown.'],
         'feature_remote_locals' => ['Locals from a Git address', 'A local can be a Git address (GitHub, GitLab, Bitbucket) instead of a folder: the tool keeps its own copy, follows the branch when it fetches (stopping on malware markers, like Pull), and deploys from it. Nothing needs to be on this computer.', 'Off: locals are folders on this computer.'],
         'feature_discord_bridge' => ['Chat with the assistant from Discord', 'A Discord bot you create reads one channel: start a chat there with !new and ask in its thread; the answer comes back to Discord. It may act as far as AI permissions and the choice below allow, asking for your ✅ first; approving a production deploy is always done in the tool. Only the Discord users listed below are answered. Off by default; set it up below.', 'Off: Discord is never read.'],
         'feature_slack_bridge' => ['Chat with the assistant from Slack', 'A Slack app you create reads one channel over a connection the tool opens to Slack (Socket Mode): start a chat there with !new and ask in its thread; the answer comes back to Slack. It may act as far as AI permissions and the choice below allow, asking for your ✅ first; approving a production deploy is always done in the tool. Only the Slack members listed below are answered. Off by default; set it up below.', 'Off: Slack is never read.'],
@@ -105,7 +107,7 @@ final class Settings
      */
     public const FEATURE_GROUPS = [
         'deploy' => ['Deploying', 'Fewer steps and faster uploads, with a safety net.', [
-            'feature_fast_verify', 'feature_bundle_upload', 'feature_promote', 'feature_post_commands', 'feature_db_backup', 'feature_delete_extras',
+            'feature_fast_verify', 'feature_bundle_upload', 'feature_commit_compare', 'feature_outside_selection', 'feature_promote', 'feature_post_commands', 'feature_db_backup', 'feature_delete_extras',
         ]],
         'review' => ['Reviewing', 'See what a deploy brings before you approve it.', [
             'feature_review_insights', 'feature_detect_sql', 'feature_debug_flags', 'feature_three_way', 'feature_commit_files', 'feature_release_notes',
@@ -147,6 +149,8 @@ final class Settings
         'feature_post_commands' => 'Runs a site\'s commands (composer install, migrations…) after the upload.',
         'feature_db_backup' => 'Saves a mysqldump of the site\'s database before anything changes.',
         'feature_remote_locals' => 'A local can be a GitHub address; the tool keeps its own copy.',
+        'feature_commit_compare' => 'Compare and send only the files of the commits you tick, e.g. one hotfix to prod.',
+        'feature_outside_selection' => 'After comparing some commits, lists the files the site still lacks from the others.',
         'feature_discord_bridge' => 'Ask the assistant in a Discord channel and get the answer there.',
         'feature_slack_bridge' => 'Ask the assistant in a Slack channel and get the answer there.',
         'feature_git_pull' => 'A Pull button on the dashboard: fast-forward only, stopped by malware.',

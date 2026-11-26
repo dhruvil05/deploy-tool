@@ -39,7 +39,7 @@ final class CommitFiles
      *
      * @return list<array{sha: string, subject: string, date: string, author: string, files: list<array{0: string, 1: string}>}>
      */
-    private static function log(Git $git, string $range, int $limit): array
+    public static function log(Git $git, string $range, int $limit): array
     {
         $output = $git->okRaw(['log', '-n', (string) $limit, '-m', '--first-parent', '--no-renames', '--name-status', '--format=%x1e%H%x1f%s%x1f%ci%x1f%an', $range, '--']);
         $commits = [];

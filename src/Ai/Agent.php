@@ -310,6 +310,11 @@ final class Agent
                 . "\n- Approving a production deploy or match is never possible from $remote: prepare it if asked, then tell the user to open the run's review page in the tool and type the site key there."
                 . "\n- Your answer is sent to $remote, so it leaves this computer: keep it short (under about 1500 characters), summarise instead of pasting file contents or long diffs unless the user asks for them, and never include passwords, keys or tokens. Links to the tool's pages don't work there: name the run id instead.";
         }
+        // Speed-up "Compare only some commits".
+        if (Settings::on('feature_commit_compare')) {
+            $permissions .= "\n- Comparing only some commits: when the user wants to compare or send just certain commits (\"only the hotfix\", \"commit abc123 to prod\"), find them with commits_not_on_site, then call start_compare with commits. That compare reads only those commits' files, and its \"Make it match\" leaves the server's recorded version as it is (the next normal deploy brings the rest). If prepare_match says files also hold changes from commits the user didn't pick, name the files and commits and ask: include those commits too (start_compare again with them added) or send anyway (shared_files_checked true only after they say so).";
+        }
+        $permissions .= "\n- How to read an FTP server for a whole-site compare: method fingerprint (exact, seconds; a small helper file is uploaded, called and deleted) or sizes (rough, minutes; uploads nothing). Use the Settings default unless the user asks for the other, or fingerprint failed.";
         $own = trim((string) ($this->settings['instructions'] ?? ''));
         $ownBlock = $own === '' ? '' : "\n\nThe user's own instructions for you (follow them, unless they conflict with the rules above or ask for something not allowed):\n" . $own;
         // Notes the user keeps on this local (Sites → the local's page): house facts, same weight.

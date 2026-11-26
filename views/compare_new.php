@@ -8,6 +8,7 @@
  * @var array $recent recent commits from $default
  * @var ?array $lastCompare
  * @var ?array $lastDeploy
+ * @var ?array $commitChoices speed-up "Compare only some commits": CommitFiles commits + site_has, or null when off
  */
 
 use DeployTool\Http;
@@ -48,7 +49,61 @@ $sizesFirst = Settings::get('compare_method') === 'sizes';
         <input type="hidden" name="_csrf" value="<?= e(Http::csrfToken()) ?>">
         <input type="hidden" name="site" value="<?= e($site['key']) ?>">
 
-        <h2><span class="step-no">1</span> Which commit?</h2>
+        <?php // Speed-up "Compare only some commits": the whole site, or just the files of the ticked commits. ?>
+        <?php if ($commitChoices !== null): ?>
+            <h2><span class="step-no">0</span> What to compare</h2>
+            <div class="repo-kind-cards scope-cards js-compare-scope">
+                <label class="radio-card repo-kind-card">
+                    <input type="radio" name="scope" value="site" checked>
+                    <span class="repo-kind-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 9h18"></path></svg></span>
+                    <span><strong>Whole site</strong><span class="meta">Every file on the server against one commit.</span></span>
+                </label>
+                <label class="radio-card repo-kind-card">
+                    <input type="radio" name="scope" value="commits">
+                    <span class="repo-kind-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v6M12 15v6"></path></svg></span>
+                    <span><strong>Only some commits</strong><span class="meta">Just the files the commits you tick changed. Seconds; e.g. one hotfix to prod.</span></span>
+                </label>
+            </div>
+            <div class="js-scope-group" data-scope="commits" hidden>
+                <h2 class="section"><span class="step-no">1</span> Which commits?</h2>
+                <p class="meta">
+                    <?php if ($commitChoices['site_has'] !== null): ?>
+                        The commits after <code><?= e(short_sha($commitChoices['site_has'])) ?></code>, the version this site was last on, newest first.
+                    <?php else: ?>
+                        This site's version isn't known, so these are the latest <?= count($commitChoices['commits']) ?> commits.
+                    <?php endif ?>
+                    Only their files are read and compared, with the newest ticked commit.
+                </p>
+                <?php if ($commitChoices['commits'] === []): ?>
+                    <p class="meta">The site already has every commit of <?= e(Sites::sourceLabel($site)) ?>.</p>
+                <?php else: ?>
+                    <ul class="pick-commits">
+                        <?php foreach ($commitChoices['commits'] as $commit): ?>
+                            <?php $count = count($commit['files']); ?>
+                            <li>
+                                <label class="pick-commit">
+                                    <input type="checkbox" name="commits[]" value="<?= e($commit['sha']) ?>">
+                                    <span class="pick-commit-text">
+                                        <span><code class="commit-sha"><?= e(short_sha($commit['sha'])) ?></code> <strong><?= e($commit['subject']) ?></strong></span>
+                                        <span class="meta"><?= e($commit['author']) ?> · <?= e(substr($commit['date'], 0, 16)) ?> · <?= $count ?> file<?= $count === 1 ? '' : 's' ?><?= $commitChoices['site_has'] !== null ? ' · not on the site yet' : '' ?></span>
+                                    </span>
+                                </label>
+                                <?php if ($count > 0): ?>
+                                    <details class="pick-commit-files">
+                                        <summary>Files</summary>
+                                        <ul><?php foreach (array_slice($commit['files'], 0, 40) as [$letter, $path]): ?><li><code><?= e($path) ?></code><?= $letter === 'A' ? ' <span class="badge badge-success">new</span>' : ($letter === 'D' ? ' <span class="badge badge-danger">removed</span>' : '') ?></li><?php endforeach ?></ul>
+                                        <?php if ($count > 40): ?><p class="meta">And <?= $count - 40 ?> more.</p><?php endif ?>
+                                    </details>
+                                <?php endif ?>
+                            </li>
+                        <?php endforeach ?>
+                    </ul>
+                <?php endif ?>
+            </div>
+        <?php endif ?>
+
+        <div class="js-scope-group" data-scope="site">
+        <h2<?= $commitChoices !== null ? ' class="section"' : '' ?>><span class="step-no">1</span> Which commit?</h2>
         <div class="field">
             <label for="commit">Commit, branch or tag</label>
             <input type="text" id="commit" name="commit" value="<?= e($default['sha'] ?? '') ?>" required spellcheck="false">
@@ -94,6 +149,7 @@ $sizesFirst = Settings::get('compare_method') === 'sizes';
                 </label>
             </div>
         <?php endif ?>
+        </div>
 
         <div class="form-actions start-actions">
             <button type="submit" class="primary">Start compare</button>

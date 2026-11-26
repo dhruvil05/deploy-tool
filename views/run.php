@@ -51,6 +51,8 @@ $showFiles = $run['files'] && $run['status'] !== 'review';
             <p class="run-hero-kind">
                 <span class="run-kind kind-<?= e($kind) ?>"><?= e(RunView::TYPES[$run['type']] ?? $run['type']) ?></span>
                 <?php if (!empty($run['production'])): ?><span class="badge badge-danger">Production</span><?php endif ?>
+                <?php if (!empty($run['partial'])): ?><span class="badge badge-info" title="Only these commits' files; the server's recorded version stays">Partial · <?= e(implode(', ', array_map('short_sha', $run['partial']['commits']))) ?></span><?php endif ?>
+                <?php if (isset($run['scope'])): ?><span class="badge badge-info">Only <?= count($run['scope']['commits']) ?> commit<?= count($run['scope']['commits']) === 1 ? '' : 's' ?></span><?php endif ?>
             </p>
             <h1><?= e($run['site_name']) ?></h1>
         </div>
@@ -197,7 +199,7 @@ $showFiles = $run['files'] && $run['status'] !== 'review';
 <?php if ($run['status'] === 'sql'): ?>
     <section class="card section">
         <h2>SQL</h2>
-        <p>The files are deployed and recorded. If this deploy needs database changes, run them now in the database yourself, then confirm here.</p>
+        <p>The files are deployed<?= empty($run['partial']) ? ' and recorded' : ' (a partial match: the recorded version stays)' ?>. If this deploy needs database changes, run them now in the database yourself, then confirm here.</p>
         <?php $sqlFiles = \DeployTool\Settings::on('feature_detect_sql') ? \DeployTool\ReviewInsights::databaseChangesOf($run) : []; ?>
         <?php if ($sqlFiles): ?>
             <div class="notice notice-warning sql-files"><strong>This deploy has database changes:</strong>

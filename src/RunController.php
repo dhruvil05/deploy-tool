@@ -68,11 +68,46 @@ final class RunController
         } catch (\RuntimeException $e) {
             $sourceError = $e->getMessage();
         }
+        // Speed-up "Compare only some commits": the source's recent commits with their files, and
+        // the site's last known version (a full deploy or match, or a compare's reading) to mark
+        // which of them the site doesn't have yet.
+        $commits = null;
+        $siteVersion = null;
+        if ($default !== null && Settings::on('feature_commit_compare')) {
+            foreach (RunStore::summaries() as $summary) {
+                if ($summary['site'] !== $site['key']) {
+                    continue;
+                }
+                if ($summary['type'] === 'rollback' && $summary['status'] === 'done') {
+                    break; // put back to an earlier state: not known from the runs
+                }
+                if (in_array($summary['type'], ['deploy', 'sync'], true) && in_array($summary['status'], ['done', 'sql'], true)) {
+                    $full = RunStore::load($summary['id']);
+                    if (empty($full['partial'])) {
+                        $siteVersion = $full['to'];
+                        break;
+                    }
+                } elseif ($summary['type'] === 'compare' && $summary['status'] === 'done') {
+                    $siteVersion = RunStore::load($summary['id'])['server_commit'] ?? null;
+                    if ($siteVersion !== null) {
+                        break;
+                    }
+                }
+            }
+            $known = $siteVersion !== null && $git->resolve($siteVersion) !== null && $git->isAncestor($siteVersion, $default['sha']);
+            $commits = match (true) {
+                !$known => ['commits' => CommitFiles::log($git, $default['sha'], 20)],
+                $siteVersion === $default['sha'] => ['commits' => []], // already has them all
+                default => CommitFiles::between($git, $siteVersion, $default['sha']),
+            };
+            $commits['site_has'] = $known ? $siteVersion : null;
+        }
         View::render('compare_new', [
             'page' => 'dashboard',
             'site' => $site,
             'default' => $default,
             'sourceError' => $sourceError,
+            'commitChoices' => $commits,
             'recent' => $default !== null ? $git->recentCommits($default['sha'], 15) : [],
             'lastCompare' => RunStore::latestFor($site['key'], ['compare'], ['done']),
             'lastDeploy' => RunStore::latestFor($site['key'], ['deploy', 'sync'], ['done']),
@@ -83,6 +118,15 @@ final class RunController
     {
         Http::requirePost();
         $site = $this->site((string) ($_POST['site'] ?? ''));
+        if (($_POST['scope'] ?? '') === 'commits') {
+            try {
+                $run = CompareRun::createScoped($site, array_values(array_filter((array) ($_POST['commits'] ?? []), 'is_string')));
+            } catch (\RuntimeException $e) {
+                Http::flash('danger', $e->getMessage());
+                Http::redirect('r=compare-new&site=' . urlencode($site['key']));
+            }
+            Http::redirect('r=run&id=' . urlencode($run['id']));
+        }
         $sha = Sites::git($site)->resolve(trim((string) ($_POST['commit'] ?? '')));
         if ($sha === null) {
             Http::flash('danger', 'That commit, branch or tag was not found in your repository.');
@@ -112,7 +156,7 @@ final class RunController
         try {
             $selected = !empty($_POST['pick']) ? array_values(array_filter((array) ($_POST['files'] ?? []), 'is_string')) : null;
             $deletes = array_values(array_filter((array) ($_POST['delete'] ?? []), 'is_string'));
-            $run = CompareRun::createSync($compare, $selected, !empty($_POST['include_eol']), $deletes);
+            $run = CompareRun::createSync($compare, $selected, !empty($_POST['include_eol']), $deletes, !empty($_POST['ack_shared']));
         } catch (\RuntimeException $e) {
             Http::flash('danger', $e->getMessage());
             Http::redirect('r=run&id=' . urlencode($compare['id']));

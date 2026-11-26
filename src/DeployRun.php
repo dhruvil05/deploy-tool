@@ -40,6 +40,7 @@ final class DeployRun
         'edited' => ['Edited on server', 'warning'],
         'not_found' => ['Missing on server', 'warning'],
         'extra' => ['On server', 'neutral'],
+        'partial' => ['Sent by a partial match', 'success'],
     ];
 
     public static function create(array $site, string $type, ?string $baseline = null, array $syncFiles = [], ?string $syncTo = null, ?string $compareId = null): array
@@ -85,6 +86,9 @@ final class DeployRun
         }
         if (empty($run['commands'])) {
             unset($phases['commands']);
+        }
+        if (!empty($run['partial'])) {
+            $phases['record'] = 'Remember the sent files'; // a partial match keeps the recorded version
         }
         return $phases;
     }
@@ -467,7 +471,14 @@ final class DeployRun
                 if ($server !== null) {
                     Backup::save($run['id'], $file['path'], $server);
                 }
-                $run['files'][$i]['server'] = self::serverState($run['type'], $file['change'], $server, $expected[$file['path']] ?? null);
+                $state = self::serverState($run['type'], $file['change'], $server, $expected[$file['path']] ?? null);
+                // A file a partial match sent earlier (speed-up "Compare only some commits") is as the
+                // tool left it, not a surprise: the warning would only be noise.
+                if (in_array($state, ['edited', 'unexpected', 'not_found', 'line_endings'], true) && $run['type'] === 'deploy'
+                    && Partials::expects($run['site'], $file['path'], $server === null ? null : Fingerprint::blobSha($server))) {
+                    $state = 'partial';
+                }
+                $run['files'][$i]['server'] = $state;
                 $run['files'][$i]['existed'] = $server !== null;
                 $run['files'][$i]['downloaded'] = true;
                 $count++;
@@ -627,8 +638,17 @@ final class DeployRun
 
     private static function record(array &$run, RunContext $context): void
     {
+        if (!empty($run['partial'])) {
+            // Speed-up "Compare only some commits": only some commits' files went up, so the site
+            // isn't on one commit. Its recorded version stays; the next deploy knows these files.
+            Partials::remember($run['site'], $run, $context->git());
+            Runner::log($run, 'info', 'Partial match (commits ' . implode(', ', array_map('short_sha', $run['partial']['commits'])) . '): the server\'s recorded version stays as it was, so the next deploy brings the rest.');
+            $run['phase'] = !empty($run['commands']) ? 'commands' : 'site_check';
+            return;
+        }
         $note = $run['type'] === 'sync' ? 'Matched to this commit after a compare' : '';
         $run['new_state_raw'] = ServerState::write($context->transport(), $run['to'], $run['id'], $note);
+        Partials::clear($run['site']); // the site is on one commit again
         Runner::log($run, 'info', 'Recorded commit ' . short_sha($run['to']) . ' on the server.');
         $run['phase'] = !empty($run['commands']) ? 'commands' : 'site_check';
     }

@@ -21,6 +21,7 @@ final class QuickCommands
         . "- `/status`: the local and each site's last deploy\n"
         . "- `/status staging`: check a site now (its version, how far behind)\n"
         . "- `/compare staging`: start a compare\n"
+        . "- `/compare prod f16451a8 9c1e2d3`: compare only those commits' files\n"
         . "- `/deploy staging`: prepare a deploy; it stops at your review\n"
         . "- `/history` or `/history 20`: the latest runs\n\n"
         . 'A site can be named by its key or part of its name. Anything else goes to the assistant.';
@@ -39,7 +40,7 @@ final class QuickCommands
             $answer = match (strtolower($command)) {
                 'help', '?' => self::HELP,
                 'status' => $argument === '' ? self::localStatus((string) $chat['local']) : self::siteStatus($chat, $argument),
-                'compare' => self::start($chat, $argument, 'start_compare', 'Compare started', ''),
+                'compare' => self::compare($chat, $argument),
                 'deploy' => self::start($chat, $argument, 'prepare_deploy', 'Deploy being prepared', 'It runs the checks and a backup, then stops at your review.'),
                 'history' => self::history($chat, $argument),
                 default => "There's no command /$command.\n\n" . self::HELP,
@@ -100,10 +101,27 @@ final class QuickCommands
         return implode("\n", $lines);
     }
 
-    private static function start(array $chat, string $name, string $action, string $what, string $after): string
+    /**
+     * /compare site, or /compare site abc1234 def5678 for only those commits' files (speed-up
+     * "Compare only some commits"): trailing words that look like commit ids are the commits.
+     */
+    private static function compare(array $chat, string $argument): string
+    {
+        $words = preg_split('/\s+/', trim($argument)) ?: [];
+        $commits = [];
+        while (count($words) > 1 && preg_match('/^[0-9a-f]{7,40}$/i', (string) end($words)) === 1) {
+            array_unshift($commits, array_pop($words));
+        }
+        if ($commits === []) {
+            return self::start($chat, $argument, 'start_compare', 'Compare started', '');
+        }
+        return self::start($chat, implode(' ', $words), 'start_compare', 'Compare of ' . count($commits) . ' commit(s) started', 'Only their files are read.', ['commits' => $commits]);
+    }
+
+    private static function start(array $chat, string $name, string $action, string $what, string $after, array $extra = []): string
     {
         $site = self::site($chat, $name);
-        $data = self::call($chat, $action, ['site' => $site['key']]);
+        $data = self::call($chat, $action, ['site' => $site['key']] + $extra);
         $id = (string) ($data['run_id'] ?? '');
         return "$what on **{$site['name']}**" . ($site['production'] ? ' (production)' : '') . '.' . ($after !== '' ? " $after" : '')
             . ($id !== '' ? " [Open the run](index.php?r=run&id=" . urlencode($id) . ')' : '');
