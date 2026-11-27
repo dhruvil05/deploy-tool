@@ -5,6 +5,35 @@ to the staging site, and from the staging site to prod, over FTPS or SSH.
 
 It runs only on this computer. It is never uploaded to staging or prod.
 
+## A quick look
+
+![Dashboard: the local's branch, the stats of the last 30 days, and each site's version and how far behind it is](docs/screenshots/dashboard.png)
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/review.png"><img src="docs/screenshots/review.png" alt="A deploy waiting for review: safety checks, backup, where the changes are and each file"></a>
+      <br><b>Review before anything changes</b>: safety checks, a backup of the server's copies, and every file with its changes.
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/deploy-done.png"><img src="docs/screenshots/deploy-done.png" alt="A finished production deploy: every file uploaded and verified"></a>
+      <br><b>A finished deploy</b>: every upload is read back and verified, with the backup and a one-click rollback.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/compare-whole-site.png"><img src="docs/screenshots/compare-whole-site.png" alt="A compare of the whole site: a file edited on the server and an extra file"></a>
+      <br><b>Compare</b>: what is really on the server against a commit, e.g. a file edited by hand or a leftover <code>phpinfo.php</code>.
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/history.png"><img src="docs/screenshots/history.png" alt="History of deploys and compares"></a>
+      <br><b>History</b>: every deploy, compare and rollback, with its backup and a CSV export.
+    </td>
+  </tr>
+</table>
+
+The screenshots show a demo project ("Acme Shop") with two folder sites, staging and production.
+
 ## Start it
 
 Either double-click `start.bat` (or run it from a terminal) and open http://127.0.0.1:8090.
@@ -86,8 +115,11 @@ uploaded, overwritten, deleted or read. See Settings.
 
 ## Speed-ups (Settings → Speed-ups)
 
-Optional extras, each switched on or off on its own (all on by default except "Upload big FTP
-deploys in one go"). Off, the tool works exactly as before.
+Optional extras, each switched on or off on its own. All are on by default except "Upload big
+FTP deploys in one go", the Discord and Slack chats, "Watch servers for changes" and the uptime
+monitor, which need setting up or run on a timer. Off, the tool works exactly as before.
+
+![Settings → Speed-ups: the extras in groups, each with its own switch](docs/screenshots/settings-speedups.png)
 
 - **Upload big FTP deploys in one go** (off by default): from a set number of files (50), an FTP
   deploy goes up as one compressed file plus a small one-time helper that unpacks it on the
@@ -119,6 +151,19 @@ deploys in one go"). Off, the tool works exactly as before.
     permission: it lists the commits a site doesn't have, compares just the ones you name
     ("compare only the hotfix on prod"), and asks you before a match sends files that other
     commits also changed. `/compare prod f16451a8 9c1e2d3` does the same without the AI.
+
+  <table>
+    <tr>
+      <td width="50%" valign="top">
+        <a href="docs/screenshots/compare-pick.png"><img src="docs/screenshots/compare-pick.png" alt="Picking only the hotfix commit to compare on production"></a>
+        <br>Pick the commits: here only the hotfix for production.
+      </td>
+      <td width="50%" valign="top">
+        <a href="docs/screenshots/compare-some-commits.png"><img src="docs/screenshots/compare-some-commits.png" alt="The result: a shared-file warning and the files outside the selection"></a>
+        <br>The result: a file another commit also changed, and the files left out.
+      </td>
+    </tr>
+  </table>
 - **Smarter checks after a deploy:** a site's check page can list several pages separated by
   commas (`/, /login, /api/health`). Each is measured before anything changes and again after;
   a page that breaks, changes its status or gets much slower is named, with **Roll back** right
@@ -233,6 +278,8 @@ scrolls sideways, number tiles go two per row, and a run's files become small ca
 
 An optional chat bot (**Assistant** in the menu) that uses the tool for you: "is staging up to
 date?", "what changed since the last deploy?", "compare staging and prepare the upload".
+
+![The assistant answering quick commands: a site's status and the latest runs](docs/screenshots/assistant.png)
 
 - **What it can do:** read locals, sites, history, runs, compare results, deploy previews and
   file changes; start compares; prepare deploys and "Make it match" uploads. A prepared run
